@@ -172,7 +172,7 @@ async def index():
 <!DOCTYPE html>
 <html>
 <head>
-    <title>INEC Field Portal</title>
+    <title>IMOLE YOUTH ACCORD MOBILIZATION</title>
     <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/css/bootstrap.min.css" rel="stylesheet">
     <style>
         body {{ background: #f4f7f6; }}
@@ -497,7 +497,7 @@ DASHBOARD_HTML = """
 <body>
 <nav class="navbar-custom">
     <div class="brand-section">
-        <div class="brand-title">ELECTION SITUATION ROOM</div>
+        <div class="brand-title">IMOLE YOUTH ACCORD MOBILIZATION ELECTION SITUATION ROOM</div>
         <div class="brand-sub">ACCORD CONSOLIDATED VIEW</div>
     </div>
     <div class="nav-kpi-group">
