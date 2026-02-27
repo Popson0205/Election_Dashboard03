@@ -155,7 +155,41 @@ async def ai_interpret(data: dict):
     )
     return {"analysis": analysis}
 
-# --- FRONTEND (RETAINED EXACTLY) ---
+import io
+import csv
+from fastapi.responses import StreamingResponse
+
+@app.get("/export/csv")
+async def export_csv():
+    with get_db() as conn:
+        with conn.cursor() as cur:
+            cur.execute("SELECT * FROM field_submissions ORDER BY timestamp DESC")
+            rows = cur.fetchall()
+            
+            # Create a string buffer to hold CSV data
+            output = io.StringIO()
+            writer = csv.writer(output)
+            
+            # Define Headers
+            header = ["Timestamp", "Officer ID", "State", "LGA", "Ward", "PU Code", "Location", 
+                      "Reg Voters", "Accredited", "Total Cast", "ACCORD", "APC", "PDP", "ADC"]
+            writer.writerow(header)
+            
+            for r in rows:
+                votes = json.loads(r['votes_json']) if isinstance(r['votes_json'], str) else r['votes_json']
+                writer.writerow([
+                    r['timestamp'], r['officer_id'], r['state'], r['lg'], r['ward'], r['pu_code'], r['location'],
+                    r['reg_voters'], r['total_accredited'], r['total_cast'],
+                    votes.get("ACCORD", 0), votes.get("APC", 0), votes.get("PDP", 0), votes.get("ADC", 0)
+                ])
+            
+            output.seek(0)
+            return StreamingResponse(
+                output, 
+                media_type="text/csv", 
+                headers={"Content-Disposition": "attachment; filename=election_results.csv"}
+            )
+
 @app.get("/", response_class=HTMLResponse)
 async def index():
     parties = ["ACCORD", "AA", "AAC", "ADC", "ADP", "APC", "APGA", "APM", "APP", "BP", "LP", "NNPP", "NRM", "PDP", "PRP", "SDP", "YPP", "ZLP"]
@@ -169,6 +203,53 @@ async def index():
         </div>''' for p in parties])
 
     return f"""
+<!DOCTYPE html>
+<html>
+<head>
+    <title>IMOLE YOUTH ACCORD MOBILIZATION</title>
+    <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/css/bootstrap.min.css" rel="stylesheet">
+    <style>
+        body {{ 
+            background: linear-gradient(rgba(0,0,0,0.6), rgba(0,0,0,0.6)), 
+                        url('/static/bg.png'); 
+            background-size: cover;
+            background-position: center;
+            background-attachment: fixed;
+            background-repeat: no-repeat;
+            min-height: 100vh;
+            margin: 0;
+        }}
+        .navbar {{ 
+            background: rgba(0, 135, 81, 0.9) !important; 
+            backdrop-filter: blur(10px);
+            color: white; 
+            border-bottom: 4px solid #ffc107; 
+        }}
+        .card {{ 
+            background: rgba(255, 255, 255, 0.95) !important; 
+            border-radius: 12px; 
+            border: none; 
+            box-shadow: 0 10px 30px rgba(0,0,0,0.3) !important; 
+            margin-bottom: 20px; 
+            color: #222; 
+        }}
+        .section-label {{ 
+            font-size: 0.75rem; 
+            font-weight: bold; 
+            color: #008751; 
+            text-transform: uppercase; 
+            border-left: 3px solid #ffc107; 
+            padding-left: 10px; 
+            margin-bottom: 15px; 
+            display: block; 
+        }}
+        input[readonly] {{ background-color: #e9ecef !important; font-weight: bold; }}
+        .modal-header {{ background: #008751; color: white; }}
+        #loginArea {{ margin-top: 100px; }}
+    </style>
+</head>
+...
+"""
 <!DOCTYPE html>
 <html>
 <head>
@@ -568,6 +649,13 @@ DASHBOARD_HTML = """
         <div class="filter-item"><label>LGA</label><select id="lgaFilter" onchange="loadWardsDash()"><option value="">All LGAs</option></select></div>
         <div class="filter-item"><label>Ward</label><select id="wardFilter" onchange="refreshData()"><option value="">All Wards</option></select></div>
     </div>
+    <div class="filter-group">
+    <div class="filter-item border-start ms-2 ps-3">
+        <a href="/export/csv" class="btn btn-sm btn-outline-success fw-bold">
+            📥 EXCEL EXPORT
+        </a>
+    </div>
+</div>
 </nav>
 
 <div class="main-container">
