@@ -1,5 +1,8 @@
-import sqlite3, json, logging, os
-from pathlib import Path
+import psycopg2
+from psycopg2.extras import RealDictCursor
+import os
+import json
+import logging
 from datetime import datetime
 from fastapi import FastAPI
 from fastapi.responses import HTMLResponse
@@ -11,68 +14,30 @@ logger = logging.getLogger(__name__)
 
 app = FastAPI()
 
-# Verified paths - KEPT EXACTLY AS PROVIDED
-DB_PATH = r"C:\Users\Popoola Idris\OneDrive - SAMBUS GEOSPATIAL\Desktop\Election\Election\Election\election_survey_full_demo\backend\app\election_v3.db"
-LOGO_PATH = r"C:\Users\Popoola Idris\OneDrive - SAMBUS GEOSPATIAL\Desktop\Election\Election\Election\election_survey_full_demo\backend\static\logos"
-
-# Serve logos
+# Render-safe Pathing
+LOGO_PATH = os.path.join(os.getcwd(), "static", "logos")
 if os.path.exists(LOGO_PATH):
     app.mount("/logos", StaticFiles(directory=LOGO_PATH), name="logos")
 
-import psycopg2
-from psycopg2.extras import RealDictCursor
-import os
-
-# Use the Internal URL on Render, or External for local testing
-DATABASE_URL = os.environ.get("PGPASSWORD=KHjYceeGY0OL5w1RMhVFM18AyRipv9Tl psql -h dpg-d6gnomfkijhs73f1cfe0-a.oregon-postgres.render.com -U election_v3_db_user election_v3_db", "postgresql://election_v3_db_user:KHjYceeGY0OL5w1RMhVFM18AyRipv9Tl@dpg-d6gnomfkijhs73f1cfe0-a.oregon-postgres.render.com/election_v3_db")
+# --- DATABASE CONNECTION ---
+# This grabs the URL from Render's Environment Variables
+DATABASE_URL = os.environ.get("DATABASE_URL", "postgresql://election_v3_db_user:KHjYceeGY0OL5w1RMhVFM18AyRipv9Tl@dpg-d6gnomfkijhs73f1cfe0-a.oregon-postgres.render.com/election_v3_db")
 
 def get_db():
-    # RealDictCursor makes Postgres return results like a Python Dictionary (similar to SQLite's Row)
+    # Use sslmode=require if connecting from local, Render handles it internally usually
     return psycopg2.connect(DATABASE_URL, cursor_factory=RealDictCursor)
 
-@app.get("/submissions")
-async def get_dashboard_data():
-    conn = get_db()
-    cur = conn.cursor()
-    try:
-        # Note: Postgres uses double quotes for case-sensitive column names or keywords if necessary
-        cur.execute("SELECT * FROM field_submissions ORDER BY timestamp DESC")
-        rows = cur.fetchall()
-        
-        data = []
-        for r in rows:
-            # Postgres handles JSON columns better, but if you migrated them as TEXT:
-            votes = json.loads(r['votes_json']) if isinstance(r['votes_json'], str) else r['votes_json']
-            
-            data.append({
-                "pu_name": r['location'],
-                "state": r['state'],
-                "lga": r['lg'],
-                "ward": r['ward'],
-                "latitude": float(r['lat']) if r['lat'] else None,
-                "longitude": float(r['lon']) if r['lon'] else None,
-                "votes_party_ACCORD": votes.get("ACCORD", 0), 
-                "votes_party_APC": votes.get("APC", 0),
-                "votes_party_PDP": votes.get("PDP", 0),
-                "votes_party_ADC": votes.get("ADC", 0),
-            })
-        return data
-    finally:
-        cur.close()
-        conn.close()
-
-# --- REWRITE ENTIRE TABLE (UPDATED WITH UNIQUE CONSTRAINT) ---
+# --- DATABASE INITIALIZATION (CAUTION) ---
 def init_db():
+    """Only run this if you want to WIPE the database and start over"""
     try:
         conn = get_db()
         cur = conn.cursor()
-        
         logger.info("Rebuilding field_submissions table...")
-        cur.execute("DROP TABLE IF EXISTS field_submissions")
-        
+        cur.execute("DROP TABLE IF EXISTS field_submissions CASCADE")
         cur.execute("""
             CREATE TABLE field_submissions (
-                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                id SERIAL PRIMARY KEY,  -- Changed from AUTOINCREMENT to SERIAL
                 officer_id TEXT,
                 state TEXT, 
                 lg TEXT, 
@@ -89,60 +54,70 @@ def init_db():
                 lon REAL, 
                 timestamp TEXT, 
                 votes_json TEXT,
-                UNIQUE(pu_code) -- ADDED: Prevents duplicate submissions for same PU
+                UNIQUE(pu_code)
             )
         """)
         conn.commit()
+        cur.close()
         conn.close()
         logger.info("✅ SUCCESS: Table field_submissions rewritten.")
     except Exception as e:
         logger.error(f"❌ DB INIT ERROR: {e}")
 
-init_db()
+# init_db() # <--- COMMENTED OUT to protect your migrated 25MB data!
 
-# --- API ENDPOINTS ---
+# --- UPDATED API ENDPOINTS FOR POSTGRES ---
 
 @app.get("/api/states")
 def get_states():
     with get_db() as conn:
-        rows = conn.execute("SELECT DISTINCT state FROM polling_units ORDER BY state").fetchall()
-        return [r["state"] for r in rows]
+        with conn.cursor() as cur:
+            cur.execute("SELECT DISTINCT state FROM polling_units ORDER BY state")
+            rows = cur.fetchall()
+            return [r["state"] for r in rows]
 
 @app.get("/api/lgas/{state}")
 def get_lgas(state: str):
     with get_db() as conn:
-        rows = conn.execute("SELECT DISTINCT lg FROM polling_units WHERE state = ? ORDER BY lg", (state,)).fetchall()
-        return [r["lg"] for r in rows]
+        with conn.cursor() as cur:
+            cur.execute("SELECT DISTINCT lg FROM polling_units WHERE state = %s ORDER BY lg", (state,))
+            rows = cur.fetchall()
+            return [r["lg"] for r in rows]
 
 @app.get("/api/wards/{state}/{lg}")
 def get_wards(state: str, lg: str):
     with get_db() as conn:
-        rows = conn.execute("SELECT DISTINCT ward, ward_code FROM polling_units WHERE state = ? AND lg = ? ORDER BY ward", (state, lg)).fetchall()
-        return [{"name": r["ward"], "code": r["ward_code"]} for r in rows]
+        with conn.cursor() as cur:
+            cur.execute("SELECT DISTINCT ward, ward_code FROM polling_units WHERE state = %s AND lg = %s ORDER BY ward", (state, lg))
+            rows = cur.fetchall()
+            return [{"name": r["ward"], "code": r["ward_code"]} for r in rows]
 
 @app.get("/api/pus/{state}/{lg}/{ward}")
 def get_pus(state: str, lg: str, ward: str):
     with get_db() as conn:
-        rows = conn.execute("SELECT location, pu_code FROM polling_units WHERE state = ? AND lg = ? AND ward = ?", (state, lg, ward)).fetchall()
-        return [{"location": r["location"], "pu_code": r["pu_code"]} for r in rows]
+        with conn.cursor() as cur:
+            cur.execute("SELECT location, pu_code FROM polling_units WHERE state = %s AND lg = %s AND ward = %s", (state, lg, ward))
+            rows = cur.fetchall()
+            return [{"location": r["location"], "pu_code": r["pu_code"]} for r in rows]
 
 @app.post("/submit")
 async def submit(data: dict):
     try:
         with get_db() as conn:
-            conn.execute("""INSERT INTO field_submissions (
-                officer_id, state, lg, ward, ward_code, pu_code, location,
-                reg_voters, total_accredited, valid_votes, rejected_votes, total_cast,
-                lat, lon, timestamp, votes_json
-            ) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)""", (
-                data['officer_id'], data['state'], data['lg'], data['ward'], data['ward_code'],
-                data['pu_code'], data['location'], data['reg_voters'], data['total_accredited'],
-                data['valid_votes'], data['rejected_votes'], data['total_cast'],
-                data['lat'], data['lon'], datetime.now().isoformat(), json.dumps(data['votes'])
-            ))
-            conn.commit()
+            with conn.cursor() as cur:
+                cur.execute("""INSERT INTO field_submissions (
+                    officer_id, state, lg, ward, ward_code, pu_code, location,
+                    reg_voters, total_accredited, valid_votes, rejected_votes, total_cast,
+                    lat, lon, timestamp, votes_json
+                ) VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s)""", (
+                    data['officer_id'], data['state'], data['lg'], data['ward'], data['ward_code'],
+                    data['pu_code'], data['location'], data['reg_voters'], data['total_accredited'],
+                    data['valid_votes'], data['rejected_votes'], data['total_cast'],
+                    data['lat'], data['lon'], datetime.now().isoformat(), json.dumps(data['votes'])
+                ))
+                conn.commit()
         return {"status": "success", "message": "Result Uploaded Successfully"}
-    except sqlite3.IntegrityError:
+    except psycopg2.IntegrityError:
         return {"status": "error", "message": "REJECTED: A submission for this Polling Unit already exists."}
     except Exception as e:
         return {"status": "error", "message": str(e)}
