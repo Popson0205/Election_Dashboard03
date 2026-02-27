@@ -29,15 +29,14 @@ def get_db():
 
 # --- DATABASE INITIALIZATION (CAUTION) ---
 def init_db():
-    """Only run this if you want to WIPE the database and start over"""
     try:
         conn = get_db()
         cur = conn.cursor()
-        logger.info("Rebuilding field_submissions table...")
-        cur.execute("DROP TABLE IF EXISTS field_submissions CASCADE")
+        
+        # We use SERIAL instead of AUTOINCREMENT for Postgres
         cur.execute("""
-            CREATE TABLE field_submissions (
-                id SERIAL PRIMARY KEY,  -- Changed from AUTOINCREMENT to SERIAL
+            CREATE TABLE IF NOT EXISTS field_submissions (
+                id SERIAL PRIMARY KEY,
                 officer_id TEXT,
                 state TEXT, 
                 lg TEXT, 
@@ -60,9 +59,12 @@ def init_db():
         conn.commit()
         cur.close()
         conn.close()
-        logger.info("✅ SUCCESS: Table field_submissions rewritten.")
+        print("✅ Table created successfully")
     except Exception as e:
-        logger.error(f"❌ DB INIT ERROR: {e}")
+        print(f"❌ DB INIT ERROR: {e}")
+
+# IMPORTANT: Ensure this is called
+init_db()
 
 # init_db() # <--- COMMENTED OUT to protect your migrated 25MB data!
 
