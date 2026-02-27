@@ -174,13 +174,55 @@ async def index():
 <head>
     <title>IMOLE YOUTH ACCORD MOBILIZATION</title>
     <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/css/bootstrap.min.css" rel="stylesheet">
-    <style>
-        body {{ background: #f4f7f6; }}
-        .navbar {{ background: #008751; color: white; border-bottom: 4px solid #ffc107; }}
-        .card {{ border-radius: 12px; border: none; box-shadow: 0 4px 10px rgba(0,0,0,0.05); margin-bottom: 20px; }}
-        .section-label {{ font-size: 0.75rem; font-weight: bold; color: #008751; text-transform: uppercase; border-left: 3px solid #ffc107; padding-left: 10px; margin-bottom: 15px; display: block; }}
-        input[readonly] {{ background-color: #e9ecef !important; font-weight: bold; }}
-        .modal-header {{ background: #008751; color: white; }}
+   <style>
+        body { 
+            /* Points to static/bg.png. The linear-gradient adds a 60% dark tint for readability */
+            background: linear-gradient(rgba(0,0,0,0.6), rgba(0,0,0,0.6)), 
+                        url('/static/bg.png'); 
+            background-size: cover;
+            background-position: center;
+            background-attachment: fixed; /* Keeps image still while you scroll 18 parties */
+            background-repeat: no-repeat;
+            min-height: 100vh;
+            margin: 0;
+        }
+
+        .navbar { 
+            background: rgba(0, 135, 81, 0.9) !important; 
+            backdrop-filter: blur(10px); /* Modern frosted glass effect */
+            color: white; 
+            border-bottom: 4px solid #ffc107; 
+        }
+
+        .card { 
+            /* Make cards slightly translucent to see the background behind them */
+            background: rgba(255, 255, 255, 0.95) !important; 
+            border-radius: 12px; 
+            border: none; 
+            box-shadow: 0 10px 30px rgba(0,0,0,0.3) !important; 
+            margin-bottom: 20px; 
+            color: #222; 
+        }
+
+        .section-label { 
+            font-size: 0.75rem; 
+            font-weight: bold; 
+            color: #008751; 
+            text-transform: uppercase; 
+            border-left: 3px solid #ffc107; 
+            padding-left: 10px; 
+            margin-bottom: 15px; 
+            display: block; 
+        }
+
+        input[readonly] { background-color: #e9ecef !important; font-weight: bold; }
+        .modal-header { background: #008751; color: white; }
+        
+        /* Ensures the login area looks professional against the image */
+        #loginArea {
+            margin-top: 100px;
+            border: 1px solid rgba(255,255,255,0.2);
+        }
     </style>
 </head>
 <body>
