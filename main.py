@@ -184,7 +184,7 @@ async def index():
     </style>
 </head>
 <body>
-    <nav class="navbar py-2 mb-4 text-center"><h5>ACCORD PARTY OFFICIAL FIELD COLLATION</h5></nav>
+    <nav class="navbar py-2 mb-4 text-center"><h5>IMOLE YOUTH ACCORD MOBILIZATION OFFICIAL FIELD COLLATION</h5></nav>
     <div class="container pb-5" style="max-width: 850px;">
         
         <div id="loginArea" class="card p-5 text-center mx-auto" style="max-width: 400px;">
