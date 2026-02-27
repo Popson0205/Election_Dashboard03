@@ -396,26 +396,36 @@ def get_dash_wards(state: str, lga: str):
 
 @app.get("/submissions")
 async def get_dashboard_data():
-    with get_db() as conn:
-        rows = conn.execute("SELECT * FROM field_submissions ORDER BY timestamp DESC").fetchall()
-        data = []
-        for r in rows:
-            votes = json.loads(r['votes_json'])
-            data.append({
-                "pu_name": r['location'],
-                "state": r['state'],
-                "lga": r['lg'],
-                "ward": r['ward'],
-                "latitude": r['lat'],
-                "longitude": r['lon'],
-                "votes_party_ACCORD": votes.get("ACCORD", 0), 
-                "votes_party_APC": votes.get("APC", 0),
-                "votes_party_PDP": votes.get("PDP", 0),
-                "votes_party_ADC": votes.get("ADC", 0),
-                "incident_type": None 
-            })
-        return data
-
+    try:
+        with get_db() as conn:
+            with conn.cursor() as cur:
+                # 1. Correct way to execute in Psycopg2
+                cur.execute("SELECT * FROM field_submissions ORDER BY timestamp DESC")
+                rows = cur.fetchall()
+                
+                data = []
+                for r in rows:
+                    # 2. Handle votes_json (Postgres might store it as a string)
+                    votes_raw = r.get('votes_json', '{}')
+                    votes = json.loads(votes_raw) if isinstance(votes_raw, str) else votes_raw
+                    
+                    data.append({
+                        "pu_name": r.get('location'),
+                        "state": r.get('state'),
+                        "lga": r.get('lg'),
+                        "ward": r.get('ward'),
+                        "latitude": r.get('lat', 0.0),
+                        "longitude": r.get('lon', 0.0),
+                        "votes_party_ACCORD": votes.get("ACCORD", 0), 
+                        "votes_party_APC": votes.get("APC", 0),
+                        "votes_party_PDP": votes.get("PDP", 0),
+                        "votes_party_ADC": votes.get("ADC", 0),
+                        "incident_type": None 
+                    })
+                return data
+    except Exception as e:
+        print(f"DASHBOARD DATA ERROR: {e}")
+        return []
 # --- DASHBOARD HTML (FULL UPDATE) ---
 DASHBOARD_HTML = """
 <!DOCTYPE html>
