@@ -19,6 +19,11 @@ LOGO_PATH = os.path.join(os.getcwd(), "static", "logos")
 if os.path.exists(LOGO_PATH):
     app.mount("/logos", StaticFiles(directory=LOGO_PATH), name="logos")
 
+# Ensure general static files (like /static/bg.png) are servable
+STATIC_PATH = os.path.join(os.getcwd(), "static")
+if os.path.exists(STATIC_PATH):
+    app.mount("/static", StaticFiles(directory=STATIC_PATH), name="static")
+
 # --- DATABASE CONNECTION ---
 # This grabs the URL from Render's Environment Variables
 DATABASE_URL = os.environ.get("DATABASE_URL", "postgresql://election_v3_db_user:KHjYceeGY0OL5w1RMhVFM18AyRipv9Tl@dpg-d6gnomfkijhs73f1cfe0-a.oregon-postgres.render.com/election_v3_db")
@@ -210,22 +215,26 @@ async def index():
     <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/css/bootstrap.min.css" rel="stylesheet">
     <style>
         body {{ 
+            /* Points to static/bg.png. The linear-gradient adds a 60% dark tint for readability */
             background: linear-gradient(rgba(0,0,0,0.6), rgba(0,0,0,0.6)), 
                         url('/static/bg.png'); 
             background-size: cover;
             background-position: center;
-            background-attachment: fixed;
+            background-attachment: fixed; /* Keeps image still while you scroll 18 parties */
             background-repeat: no-repeat;
             min-height: 100vh;
             margin: 0;
         }}
+
         .navbar {{ 
             background: rgba(0, 135, 81, 0.9) !important; 
-            backdrop-filter: blur(10px);
+            backdrop-filter: blur(10px); /* Modern frosted glass effect */
             color: white; 
             border-bottom: 4px solid #ffc107; 
         }}
+
         .card {{ 
+            /* Make cards slightly translucent to see the background behind them */
             background: rgba(255, 255, 255, 0.95) !important; 
             border-radius: 12px; 
             border: none; 
@@ -233,6 +242,7 @@ async def index():
             margin-bottom: 20px; 
             color: #222; 
         }}
+
         .section-label {{ 
             font-size: 0.75rem; 
             font-weight: bold; 
@@ -243,67 +253,15 @@ async def index():
             margin-bottom: 15px; 
             display: block; 
         }}
+
         input[readonly] {{ background-color: #e9ecef !important; font-weight: bold; }}
         .modal-header {{ background: #008751; color: white; }}
-        #loginArea {{ margin-top: 100px; }}
-    </style>
-</head>
-...
-"""
-<!DOCTYPE html>
-<html>
-<head>
-    <title>IMOLE YOUTH ACCORD MOBILIZATION</title>
-    <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/css/bootstrap.min.css" rel="stylesheet">
-   <style>
-        body { 
-            /* Points to static/bg.png. The linear-gradient adds a 60% dark tint for readability */
-            background: linear-gradient(rgba(0,0,0,0.6), rgba(0,0,0,0.6)), 
-                        url('/static/bg.png'); 
-            background-size: cover;
-            background-position: center;
-            background-attachment: fixed; /* Keeps image still while you scroll 18 parties */
-            background-repeat: no-repeat;
-            min-height: 100vh;
-            margin: 0;
-        }
-
-        .navbar { 
-            background: rgba(0, 135, 81, 0.9) !important; 
-            backdrop-filter: blur(10px); /* Modern frosted glass effect */
-            color: white; 
-            border-bottom: 4px solid #ffc107; 
-        }
-
-        .card { 
-            /* Make cards slightly translucent to see the background behind them */
-            background: rgba(255, 255, 255, 0.95) !important; 
-            border-radius: 12px; 
-            border: none; 
-            box-shadow: 0 10px 30px rgba(0,0,0,0.3) !important; 
-            margin-bottom: 20px; 
-            color: #222; 
-        }
-
-        .section-label { 
-            font-size: 0.75rem; 
-            font-weight: bold; 
-            color: #008751; 
-            text-transform: uppercase; 
-            border-left: 3px solid #ffc107; 
-            padding-left: 10px; 
-            margin-bottom: 15px; 
-            display: block; 
-        }
-
-        input[readonly] { background-color: #e9ecef !important; font-weight: bold; }
-        .modal-header { background: #008751; color: white; }
         
         /* Ensures the login area looks professional against the image */
-        #loginArea {
+        #loginArea {{
             margin-top: 100px;
             border: 1px solid rgba(255,255,255,0.2);
-        }
+        }}
     </style>
 </head>
 <body>
@@ -649,13 +607,6 @@ DASHBOARD_HTML = """
         <div class="filter-item"><label>LGA</label><select id="lgaFilter" onchange="loadWardsDash()"><option value="">All LGAs</option></select></div>
         <div class="filter-item"><label>Ward</label><select id="wardFilter" onchange="refreshData()"><option value="">All Wards</option></select></div>
     </div>
-    <div class="filter-group">
-    <div class="filter-item border-start ms-2 ps-3">
-        <a href="/export/csv" class="btn btn-sm btn-outline-success fw-bold">
-            📥 EXCEL EXPORT
-        </a>
-    </div>
-</div>
 </nav>
 
 <div class="main-container">
@@ -765,123 +716,203 @@ async function loadWardsDash() {
     refreshData();
 }
 
-function resetFilters() {
-    document.getElementById("stateFilter").value = "";
-    document.getElementById("lgaFilter").innerHTML = '<option value="">All LGAs</option>';
-    document.getElementById("wardFilter").innerHTML = '<option value="">All Wards</option>';
-    refreshData();
-}
-
 async function refreshData() {
     try {
+        const tsBox = document.getElementById('lastUpdateTS');
+        tsBox.innerText = 'Updating...';
+        
         const res = await fetch("/submissions");
-        let data = await res.json();
-        const sf = document.getElementById("stateFilter").value;
-        const lf = document.getElementById("lgaFilter").value;
-        const wf = document.getElementById("wardFilter").value;
+        globalData = await res.json();
+        
+        // Filter based on dropdowns
+        const state = document.getElementById("stateFilter").value;
+        const lga = document.getElementById("lgaFilter").value;
+        const ward = document.getElementById("wardFilter").value;
         const search = document.getElementById("puSearch").value.toLowerCase();
         
-        if(sf) data = data.filter(d => d.state === sf);
-        if(lf) data = data.filter(d => d.lga === lf);
-        if(wf) data = data.filter(d => d.ward === wf);
-        if(search) data = data.filter(d => d.pu_name.toLowerCase().includes(search));
-
-        globalData = data; 
-        updateUI(data);
-    } catch(e) { console.error(e); }
-}
-
-async function runAI() {
-    const data = {
-        ACCORD: parseInt(document.getElementById("nav-ACCORD").innerText.replace(/,/g, '')),
-        APC: parseInt(document.getElementById("nav-APC").innerText.replace(/,/g, '')),
-        PDP: parseInt(document.getElementById("nav-PDP").innerText.replace(/,/g, '')),
-        ADC: parseInt(document.getElementById("nav-ADC").innerText.replace(/,/g, '')),
-    };
-    const res = await fetch("/api/ai_interpret", {
-        method: 'POST',
-        headers: {'Content-Type': 'application/json'},
-        body: JSON.stringify(data)
-    });
-    const out = await res.json();
-    document.getElementById("ai_box").innerText = out.analysis;
-}
-
-function updateUI(data) {
-    let tACCORD = 0, tAPC = 0, tPDP = 0, tADC = 0, listHtml = "", heatPoints = [];
-    markers.forEach(m => map.removeLayer(m));
-    if(heatLayer) map.removeLayer(heatLayer);
-    markers = [];
-    
-    data.forEach(d => {
-        tACCORD += d.votes_party_ACCORD; tAPC += d.votes_party_APC; tPDP += d.votes_party_PDP; tADC += d.votes_party_ADC;
+        let filtered = globalData.filter(d => {
+            return (!state || d.state === state) &&
+                   (!lga || d.lga === lga) &&
+                   (!ward || d.ward === ward) &&
+                   (!search || d.pu_name.toLowerCase().includes(search));
+        });
         
-        listHtml += `<div class="pu-card"><b>${d.pu_name}</b><small class="pu-loc">${d.lga}, ${d.ward}</small>
-        <div class="pu-grid">
-            <div class="grid-val"><small>ACC</small><span>${d.votes_party_ACCORD}</span></div>
-            <div class="grid-val"><small>APC</small><span>${d.votes_party_APC}</span></div>
-            <div class="grid-val"><small>PDP</small><span>${d.votes_party_PDP}</span></div>
-            <div class="grid-val"><small>ADC</small><span>${d.votes_party_ADC}</span></div>
-        </div></div>`;
+        updateKpis(filtered);
+        updateMap(filtered);
+        updateChart(filtered);
+        updateList(filtered);
+        
+        tsBox.innerText = 'Last Updated: ' + new Date().toLocaleTimeString();
+    } catch(e) { console.error("Refresh Error:", e); }
+}
 
+function updateKpis(data) {
+    let totals = { ACCORD: 0, APC: 0, PDP: 0, ADC: 0 };
+    data.forEach(d => {
+        totals.ACCORD += d.votes_party_ACCORD;
+        totals.APC += d.votes_party_APC;
+        totals.PDP += d.votes_party_PDP;
+        totals.ADC += d.votes_party_ADC;
+    });
+    
+    // Nav KPIs
+    document.getElementById('nav-ACCORD').innerText = totals.ACCORD.toLocaleString();
+    document.getElementById('nav-APC').innerText = totals.APC.toLocaleString();
+    document.getElementById('nav-PDP').innerText = totals.PDP.toLocaleString();
+    document.getElementById('nav-ADC').innerText = totals.ADC.toLocaleString();
+    
+    // Sidebar Big Total KPIs
+    document.getElementById('totalAccordBig').innerText = totals.ACCORD.toLocaleString();
+    document.getElementById('totalAPCBig').innerText = totals.APC.toLocaleString();
+    document.getElementById('totalPDPBig').innerText = totals.PDP.toLocaleString();
+    document.getElementById('totalADCBig').innerText = totals.ADC.toLocaleString();
+    
+    // Margin
+    let competitors = { APC: totals.APC, PDP: totals.PDP, ADC: totals.ADC };
+    let topRival = Object.keys(competitors).reduce((a, b) => competitors[a] > competitors[b] ? a : b);
+    let margin = totals.ACCORD - competitors[topRival];
+    let sign = margin >= 0 ? '+' : '';
+    document.getElementById('nav-Margin').innerText = sign + margin.toLocaleString();
+}
+
+function updateMap(data) {
+    markers.forEach(m => map.removeLayer(m));
+    markers = [];
+    if(heatLayer) map.removeLayer(heatLayer);
+    
+    let heatPoints = [];
+    data.forEach(d => {
         if(d.latitude && d.longitude) {
-            markers.push(L.circleMarker([d.latitude, d.longitude], {radius: 4, color: '#ffc107'}).addTo(map));
-            heatPoints.push([d.latitude, d.longitude, d.votes_party_ACCORD / 100]);
+            let color = '#555'; // Grey fallback
+            if(d.votes_party_ACCORD > d.votes_party_APC && d.votes_party_ACCORD > d.votes_party_PDP) color = var(--gold);
+            else if(d.votes_party_APC > d.votes_party_ACCORD && d.votes_party_APC > d.votes_party_PDP) color = var(--apc);
+            else if(d.votes_party_PDP > d.votes_party_ACCORD && d.votes_party_PDP > d.votes_party_APC) color = var(--pdp);
+            
+            let m = L.circleMarker([d.latitude, d.longitude], {
+                radius: 6,
+                fillColor: color,
+                color: '#fff',
+                weight: 1,
+                fillOpacity: 0.8
+            }).bindPopup(`<b>${d.pu_name}</b><br>ACC: ${d.votes_party_ACCORD}<br>APC: ${d.votes_party_APC}<br>PDP: ${d.votes_party_PDP}`);
+            m.addTo(map);
+            markers.push(m);
+            heatPoints.push([d.latitude, d.longitude, d.votes_party_ACCORD]);
         }
     });
-
-    heatLayer = L.heatLayer(heatPoints, {radius: 25, blur: 15, maxZoom: 10}).addTo(map);
-
-    document.getElementById("nav-ACCORD").innerText = tACCORD.toLocaleString();
-    document.getElementById("totalAccordBig").innerText = tACCORD.toLocaleString();
-    document.getElementById("nav-APC").innerText = tAPC.toLocaleString();
-    document.getElementById("totalAPCBig").innerText = tAPC.toLocaleString();
-    document.getElementById("nav-PDP").innerText = tPDP.toLocaleString();
-    document.getElementById("totalPDPBig").innerText = tPDP.toLocaleString();
-    document.getElementById("nav-ADC").innerText = tADC.toLocaleString();
-    document.getElementById("totalADCBig").innerText = tADC.toLocaleString();
     
-    document.getElementById("nav-Margin").innerText = (tACCORD - Math.max(tAPC, tPDP)).toLocaleString();
-    document.getElementById("puContainer").innerHTML = listHtml;
-    document.getElementById("lastUpdateTS").innerText = "Last Updated: " + new Date().toLocaleTimeString();
-    
-    updateCharts(tACCORD, tAPC, tPDP, tADC);
+    if(heatPoints.length > 0) {
+        heatLayer = L.heatLayer(heatPoints, {radius: 25, blur: 15, gradient: {0.4: 'blue', 0.65: 'lime', 1: 'red'}}).addTo(map);
+    }
 }
 
-function updateCharts(acc, apc, pdp, adc) {
-    const ctx = document.getElementById('pieChart');
+function updateChart(data) {
+    let totals = { ACCORD: 0, APC: 0, PDP: 0, ADC: 0 };
+    data.forEach(d => {
+        totals.ACCORD += d.votes_party_ACCORD;
+        totals.APC += d.votes_party_APC;
+        totals.PDP += d.votes_party_PDP;
+        totals.ADC += d.votes_party_ADC;
+    });
+    
+    const chartData = [totals.ACCORD, totals.APC, totals.PDP, totals.ADC];
+    const chartLabels = ['ACCORD', 'APC', 'PDP', 'ADC'];
+    const chartColors = [getComputedStyle(document.documentElement).getPropertyValue('--gold'), getComputedStyle(document.documentElement).getPropertyValue('--apc'), getComputedStyle(document.documentElement).getPropertyValue('--pdp'), getComputedStyle(document.documentElement).getPropertyValue('--adc')];
+
     if(charts.pie) charts.pie.destroy();
+    
+    const ctx = document.getElementById('pieChart').getContext('2d');
     charts.pie = new Chart(ctx, {
         type: 'doughnut',
         data: {
-            labels: ['ACCORD', 'APC', 'PDP', 'ADC'],
-            datasets: [{ 
-                data: [acc, apc, pdp, adc], 
-                backgroundColor: ['#ffc107', '#0b3d91', '#d9534f', '#006400'],
+            labels: chartLabels,
+            datasets: [{
+                data: chartData,
+                backgroundColor: chartColors,
                 borderWidth: 1,
                 borderColor: '#161616'
             }]
         },
-        options: { 
-            maintainAspectRatio: false, 
+        options: {
+            responsive: true,
+            maintainAspectRatio: false,
             cutout: '70%',
-            plugins: { 
+            plugins: {
                 legend: { display: false },
                 datalabels: {
                     color: '#fff',
                     font: { weight: 'bold', size: 10 },
-                    formatter: (value, context) => {
-                        const total = context.dataset.data.reduce((a, b) => a + b, 0);
-                        return total > 0 ? Math.round((value / total) * 100) + '%' : '';
+                    formatter: (value, ctx) => {
+                        let sum = 0;
+                        let dataArr = ctx.chart.data.datasets[0].data;
+                        dataArr.map(data => { sum += data; });
+                        let percentage = (value*100 / sum).toFixed(1)+"%";
+                        return percentage === '0.0%' ? '' : percentage;
                     }
                 }
-            } 
+            }
         }
     });
 }
 
+function updateList(data) {
+    const container = document.getElementById('puContainer');
+    container.innerHTML = '';
+    
+    data.slice(0, 50).forEach(d => { // Limit to 50 for performance
+        let leadParty = 'Grey';
+        if(d.votes_party_ACCORD > d.votes_party_APC && d.votes_party_ACCORD > d.votes_party_PDP) leadParty = 'Gold';
+        
+        let card = L.DomUtil.create('div', 'pu-card', container);
+        card.innerHTML = `
+            <b>${d.pu_name}</b>
+            <span class="pu-loc">${d.lga} > ${d.ward}</span>
+            <div class="pu-grid">
+                <div class="grid-val"><small>ACC</small><span>${d.votes_party_ACCORD}</span></div>
+                <div class="grid-val"><small>APC</small><span>${d.votes_party_APC}</span></div>
+                <div class="grid-val"><small>PDP</small><span>${d.votes_party_PDP}</span></div>
+                <div class="grid-val"><small>ADC</small><span>${d.votes_party_ADC}</span></div>
+            </div>
+        `;
+        card.onclick = () => {
+            if(d.latitude && d.longitude) map.setView([d.latitude, d.longitude], 14);
+        };
+    });
+}
+
+function resetFilters() {
+    document.getElementById("stateFilter").value = "";
+    document.getElementById("lgaFilter").innerHTML = '<option value="">All LGAs</option>';
+    document.getElementById("wardFilter").innerHTML = '<option value="">All Wards</option>';
+    document.getElementById("puSearch").value = "";
+    refreshData();
+}
+
+async function runAI() {
+    try {
+        const aiBox = document.getElementById('ai_box');
+        aiBox.innerText = "Analyzing current data trends...";
+        
+        let totals = { ACCORD: 0, APC: 0, PDP: 0, ADC: 0 };
+        globalData.forEach(d => {
+            totals.ACCORD += d.votes_party_ACCORD;
+            totals.APC += d.votes_party_APC;
+            totals.PDP += d.votes_party_PDP;
+            totals.ADC += d.votes_party_ADC;
+        });
+
+        const res = await fetch("/api/ai_interpret", {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify(totals)
+        });
+        const result = await res.json();
+        aiBox.innerText = result.analysis;
+    } catch(e) { console.error("AI Error:", e); }
+}
+
 initDashboard();
-setInterval(refreshData, 30000);
 </script>
-</body></html>
+</body>
+</html>
 """
