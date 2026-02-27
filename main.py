@@ -24,7 +24,7 @@ from psycopg2.extras import RealDictCursor
 import os
 
 # Use the Internal URL on Render, or External for local testing
-DATABASE_URL = os.environ.get("DATABASE_URL", "postgresql://election_v3_db_user:KHjYceeGY0OL5w1RMhVFM18AyRipv9Tl@dpg-d6gnomfkijhs73f1cfe0-a.oregon-postgres.render.com/election_v3_db")
+DATABASE_URL = os.environ.get("PGPASSWORD=KHjYceeGY0OL5w1RMhVFM18AyRipv9Tl psql -h dpg-d6gnomfkijhs73f1cfe0-a.oregon-postgres.render.com -U election_v3_db_user election_v3_db", "postgresql://election_v3_db_user:KHjYceeGY0OL5w1RMhVFM18AyRipv9Tl@dpg-d6gnomfkijhs73f1cfe0-a.oregon-postgres.render.com/election_v3_db")
 
 def get_db():
     # RealDictCursor makes Postgres return results like a Python Dictionary (similar to SQLite's Row)
