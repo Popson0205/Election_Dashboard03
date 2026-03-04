@@ -485,6 +485,7 @@ async def index():
 </html>
 """
 # --- DASHBOARD PAGE ---
+# --- DASHBOARD PAGE ---
 
 @app.get("/dashboard", response_class=HTMLResponse)
 async def dashboard_page():
@@ -501,6 +502,8 @@ DASHBOARD_HTML = """
     <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/bootstrap-icons@1.11.1/font/bootstrap-icons.css">
     <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
     <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/chartjs-plugin-datalabels@2.0.0"></script>
+    
     <style>
         :root { --gold: #ffc107; --dark: #0a0a0a; --panel: #141414; }
         body { background-color: var(--dark); color: #fff; font-family: 'Segoe UI', sans-serif; overflow: hidden; height: 100vh; margin: 0; }
@@ -526,9 +529,9 @@ DASHBOARD_HTML = """
         .margin-card { background: #1e1e1e; border-radius: 8px; padding: 15px; text-align: center; margin: 10px; border: 1px solid #333; }
         .margin-val { font-size: 1.8rem; font-weight: 900; display: block; color: var(--gold); line-height: 1.2; }
         
-        #map { height: 50%; border-radius: 12px; background: #111; margin-bottom: 10px; }
-        .chart-row { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; flex: 1; overflow: hidden; }
-        .chart-box { background: #1a1a1a; border-radius: 12px; padding: 10px; border: 1px solid #222; position: relative; height: 100%; }
+        #map { height: 45%; border-radius: 12px; background: #111; margin-bottom: 10px; }
+        .chart-row { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; flex: 1; min-height: 0; }
+        .chart-box { background: #1a1a1a; border-radius: 12px; padding: 15px; border: 1px solid #222; position: relative; height: 100%; min-height: 300px; }
 
         .feed-container { flex: 1; overflow-y: auto; padding: 10px; }
         .pu-card { background: #1e1e1e; border-radius: 8px; padding: 10px; margin-bottom: 8px; border-left: 4px solid var(--gold); cursor: pointer; }
@@ -570,7 +573,7 @@ DASHBOARD_HTML = """
         <div class="feed-container" id="feedList"></div>
     </div>
 
-    <div class="d-flex flex-column">
+    <div class="d-flex flex-column" style="min-height: 0;">
         <div id="map"></div>
         <div class="chart-row">
             <div class="chart-box"><canvas id="barChart"></canvas></div>
@@ -597,6 +600,7 @@ DASHBOARD_HTML = """
 
 <script>
     let map, globalData = [], filterLookup = [], markers = [], pie, bar;
+    Chart.register(ChartDataLabels);
 
     function init() {
         map = L.map('map', { zoomControl: false }).setView([9.08, 8.67], 6);
@@ -705,26 +709,54 @@ DASHBOARD_HTML = """
         const labels = ['ACCORD', 'APC', 'PDP', 'ADC'];
         const vals = [t.ACCORD, t.APC, t.PDP, t.ADC];
         const colors = ['#ffc107', '#0b3d91', '#d9534f', '#138808'];
+        const total = vals.reduce((a, b) => a + b, 0);
 
         if(pie) pie.destroy();
-        const ctxPie = document.getElementById('pieChart');
-        if(ctxPie) {
-            pie = new Chart(ctxPie, {
-                type: 'doughnut',
-                data: { labels, datasets: [{ data: vals, backgroundColor: colors, borderWidth: 0 }] },
-                options: { maintainAspectRatio: false, plugins: { legend: { position: 'bottom', labels: { color: '#fff', font: { size: 10 } } } } }
-            });
-        }
+        pie = new Chart(document.getElementById('pieChart'), {
+            type: 'doughnut',
+            data: { labels, datasets: [{ data: vals, backgroundColor: colors, borderWidth: 0 }] },
+            options: {
+                maintainAspectRatio: false,
+                layout: { padding: { bottom: 20 } },
+                plugins: {
+                    legend: { 
+                        position: 'bottom', 
+                        labels: { color: '#fff', font: { size: 10 }, padding: 10 } 
+                    },
+                    datalabels: {
+                        color: '#fff',
+                        font: { weight: 'bold', size: 11 },
+                        formatter: (val) => {
+                            if (total === 0) return '';
+                            return val > 0 ? ((val/total)*100).toFixed(1) + '%' : '';
+                        }
+                    }
+                }
+            }
+        });
 
         if(bar) bar.destroy();
-        const ctxBar = document.getElementById('barChart');
-        if(ctxBar) {
-            bar = new Chart(ctxBar, {
-                type: 'bar',
-                data: { labels, datasets: [{ data: vals, backgroundColor: colors }] },
-                options: { maintainAspectRatio: false, plugins: { legend: { display: false } }, scales: { y: { ticks: { color: '#fff' } }, x: { ticks: { color: '#fff' } } } }
-            });
-        }
+        bar = new Chart(document.getElementById('barChart'), {
+            type: 'bar',
+            data: { labels, datasets: [{ data: vals, backgroundColor: colors }] },
+            options: {
+                maintainAspectRatio: false,
+                plugins: {
+                    legend: { display: false },
+                    datalabels: {
+                        color: '#fff',
+                        anchor: 'end',
+                        align: 'top',
+                        font: { weight: 'bold' },
+                        formatter: (val) => val > 0 ? val.toLocaleString() : ''
+                    }
+                },
+                scales: {
+                    y: { beginAtZero: true, ticks: { color: '#fff', font: { size: 9 } }, grid: { color: '#222' } },
+                    x: { ticks: { color: '#fff', font: { size: 10 } } }
+                }
+            }
+        });
     }
 
     async function runAI(totals) {
