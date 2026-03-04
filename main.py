@@ -3,9 +3,11 @@ from psycopg2.extras import RealDictCursor
 import os
 import json
 import logging
+import io
+import csv
 from datetime import datetime
 from fastapi import FastAPI
-from fastapi.responses import HTMLResponse
+from fastapi.responses import HTMLResponse, StreamingResponse
 from fastapi.staticfiles import StaticFiles
 
 # --- CONFIGURATION ---
@@ -19,26 +21,21 @@ LOGO_PATH = os.path.join(os.getcwd(), "static", "logos")
 if os.path.exists(LOGO_PATH):
     app.mount("/logos", StaticFiles(directory=LOGO_PATH), name="logos")
 
-# Ensure general static files (like /static/bg.png) are servable
 STATIC_PATH = os.path.join(os.getcwd(), "static")
 if os.path.exists(STATIC_PATH):
     app.mount("/static", StaticFiles(directory=STATIC_PATH), name="static")
 
 # --- DATABASE CONNECTION ---
-# This grabs the URL from Render's Environment Variables
 DATABASE_URL = os.environ.get("DATABASE_URL", "postgresql://election_v3_db_user:KHjYceeGY0OL5w1RMhVFM18AyRipv9Tl@dpg-d6gnomfkijhs73f1cfe0-a.oregon-postgres.render.com/election_v3_db")
 
 def get_db():
-    # Use sslmode=require if connecting from local, Render handles it internally usually
     return psycopg2.connect(DATABASE_URL, cursor_factory=RealDictCursor)
 
-# --- DATABASE INITIALIZATION (CAUTION) ---
+# --- DATABASE INITIALIZATION ---
 def init_db():
     try:
         conn = get_db()
         cur = conn.cursor()
-        
-        # We use SERIAL instead of AUTOINCREMENT for Postgres
         cur.execute("""
             CREATE TABLE IF NOT EXISTS field_submissions (
                 id SERIAL PRIMARY KEY,
@@ -68,12 +65,9 @@ def init_db():
     except Exception as e:
         print(f"❌ DB INIT ERROR: {e}")
 
-# IMPORTANT: Ensure this is called
 init_db()
 
-# init_db() # <--- COMMENTED OUT to protect your migrated 25MB data!
-
-# --- UPDATED API ENDPOINTS FOR POSTGRES ---
+# --- API ENDPOINTS ---
 
 @app.get("/api/states")
 def get_states():
@@ -129,40 +123,19 @@ async def submit(data: dict):
     except Exception as e:
         return {"status": "error", "message": str(e)}
 
-# --- NEW: PROFESSIONAL STATISTICAL AI INTERPRETATION ---
 @app.post("/api/ai_interpret")
 async def ai_interpret(data: dict):
-    acc = data.get('ACCORD', 0)
-    apc = data.get('APC', 0)
-    pdp = data.get('PDP', 0)
-    adc = data.get('ADC', 0)
-    
+    acc = data.get('ACCORD', 0); apc = data.get('APC', 0); pdp = data.get('PDP', 0); adc = data.get('ADC', 0)
     total = acc + apc + pdp + adc
-    if total == 0:
-        return {"analysis": "SYSTEM STATUS: Awaiting live data stream for comparative trend analysis."}
-    
-    # Statistical Calcs
+    if total == 0: return {"analysis": "SYSTEM STATUS: Awaiting live data stream."}
     share = (acc / total) * 100
     competitors = {"APC": apc, "PDP": pdp, "ADC": adc}
     top_rival = max(competitors, key=competitors.get)
-    rival_val = competitors[top_rival]
-    margin = acc - rival_val
-    
-    # Pro Interpretation logic
-    trend = "Dominant" if share > 50 else "Competitive"
+    margin = acc - competitors[top_rival]
     performance = "Leading" if margin > 0 else "Trailing"
-    
-    analysis = (
-        f"STATISTICAL AUDIT: Accord currently maintains a {share:.1f}% vote share across reported units. "
-        f"In direct comparison with {top_rival} (Primary Rival), the party is {performance} by a margin of {abs(margin):,} votes. "
-        f"Performance metrics indicate a '{trend}' trajectory. Strategy: Consolidate presence in high-density wards "
-        f"to neutralize {top_rival}'s gains in peripheral LGAs."
-    )
+    analysis = (f"STATISTICAL AUDIT: Accord maintains a {share:.1f}% vote share. "
+                f"Currently {performance} against {top_rival} by {abs(margin):,} votes.")
     return {"analysis": analysis}
-
-import io
-import csv
-from fastapi.responses import StreamingResponse
 
 @app.get("/export/csv")
 async def export_csv():
@@ -170,31 +143,31 @@ async def export_csv():
         with conn.cursor() as cur:
             cur.execute("SELECT * FROM field_submissions ORDER BY timestamp DESC")
             rows = cur.fetchall()
-            
-            # Create a string buffer to hold CSV data
             output = io.StringIO()
             writer = csv.writer(output)
-            
-            # Define Headers
-            header = ["Timestamp", "Officer ID", "State", "LGA", "Ward", "PU Code", "Location", 
-                      "Reg Voters", "Accredited", "Total Cast", "ACCORD", "APC", "PDP", "ADC"]
-            writer.writerow(header)
-            
+            writer.writerow(["Timestamp", "Officer ID", "State", "LGA", "Ward", "PU Code", "Location", "Accredited", "ACCORD", "APC", "PDP", "ADC"])
             for r in rows:
-                votes = json.loads(r['votes_json']) if isinstance(r['votes_json'], str) else r['votes_json']
-                writer.writerow([
-                    r['timestamp'], r['officer_id'], r['state'], r['lg'], r['ward'], r['pu_code'], r['location'],
-                    r['reg_voters'], r['total_accredited'], r['total_cast'],
-                    votes.get("ACCORD", 0), votes.get("APC", 0), votes.get("PDP", 0), votes.get("ADC", 0)
-                ])
-            
+                v = json.loads(r['votes_json']) if isinstance(r['votes_json'], str) else r['votes_json']
+                writer.writerow([r['timestamp'], r['officer_id'], r['state'], r['lg'], r['ward'], r['pu_code'], r['location'], r['total_accredited'], v.get("ACCORD",0), v.get("APC",0), v.get("PDP",0), v.get("ADC",0)])
             output.seek(0)
-            return StreamingResponse(
-                output, 
-                media_type="text/csv", 
-                headers={"Content-Disposition": "attachment; filename=election_results.csv"}
-            )
+            return StreamingResponse(output, media_type="text/csv", headers={"Content-Disposition": "attachment; filename=results.csv"})
 
+@app.get("/submissions")
+async def get_dashboard_data():
+    with get_db() as conn:
+        with conn.cursor() as cur:
+            cur.execute("SELECT * FROM field_submissions ORDER BY timestamp DESC")
+            rows = cur.fetchall()
+            data = []
+            for r in rows:
+                v = json.loads(r['votes_json']) if isinstance(r['votes_json'], str) else r['votes_json']
+                data.append({
+                    "pu_name": r['location'], "state": r['state'], "lga": r['lg'], "ward": r['ward'],
+                    "latitude": r['lat'], "longitude": r['lon'],
+                    "votes_party_ACCORD": v.get("ACCORD", 0), "votes_party_APC": v.get("APC", 0),
+                    "votes_party_PDP": v.get("PDP", 0), "votes_party_ADC": v.get("ADC", 0)
+                })
+            return data
 @app.get("/", response_class=HTMLResponse)
 async def index():
     parties = ["ACCORD", "AA", "AAC", "ADC", "ADP", "APC", "APGA", "APM", "APP", "BP", "LP", "NNPP", "NRM", "PDP", "PRP", "SDP", "YPP", "ZLP"]
@@ -214,60 +187,17 @@ async def index():
     <title>IMOLE YOUTH ACCORD MOBILIZATION</title>
     <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/css/bootstrap.min.css" rel="stylesheet">
     <style>
-        body {{ 
-            /* Points to static/bg.png. The linear-gradient adds a 60% dark tint for readability */
-            background: linear-gradient(rgba(0,0,0,0.6), rgba(0,0,0,0.6)), 
-                        url('/static/bg.png'); 
-            background-size: cover;
-            background-position: center;
-            background-attachment: fixed; /* Keeps image still while you scroll 18 parties */
-            background-repeat: no-repeat;
-            min-height: 100vh;
-            margin: 0;
-        }}
-
-        .navbar {{ 
-            background: rgba(0, 135, 81, 0.9) !important; 
-            backdrop-filter: blur(10px); /* Modern frosted glass effect */
-            color: white; 
-            border-bottom: 4px solid #ffc107; 
-        }}
-
-        .card {{ 
-            /* Make cards slightly translucent to see the background behind them */
-            background: rgba(255, 255, 255, 0.95) !important; 
-            border-radius: 12px; 
-            border: none; 
-            box-shadow: 0 10px 30px rgba(0,0,0,0.3) !important; 
-            margin-bottom: 20px; 
-            color: #222; 
-        }}
-
-        .section-label {{ 
-            font-size: 0.75rem; 
-            font-weight: bold; 
-            color: #008751; 
-            text-transform: uppercase; 
-            border-left: 3px solid #ffc107; 
-            padding-left: 10px; 
-            margin-bottom: 15px; 
-            display: block; 
-        }}
-
+        body {{ background: linear-gradient(rgba(0,0,0,0.6), rgba(0,0,0,0.6)), url('/static/bg.png'); background-size: cover; background-position: center; background-attachment: fixed; min-height: 100vh; margin: 0; }}
+        .navbar {{ background: rgba(0, 135, 81, 0.9) !important; backdrop-filter: blur(10px); color: white; border-bottom: 4px solid #ffc107; }}
+        .card {{ background: rgba(255, 255, 255, 0.95) !important; border-radius: 12px; border: none; box-shadow: 0 10px 30px rgba(0,0,0,0.3) !important; margin-bottom: 20px; color: #222; }}
+        .section-label {{ font-size: 0.75rem; font-weight: bold; color: #008751; text-transform: uppercase; border-left: 3px solid #ffc107; padding-left: 10px; margin-bottom: 15px; display: block; }}
         input[readonly] {{ background-color: #e9ecef !important; font-weight: bold; }}
-        .modal-header {{ background: #008751; color: white; }}
-        
-        /* Ensures the login area looks professional against the image */
-        #loginArea {{
-            margin-top: 100px;
-            border: 1px solid rgba(255,255,255,0.2);
-        }}
+        #loginArea {{ margin-top: 100px; }}
     </style>
 </head>
 <body>
     <nav class="navbar py-2 mb-4 text-center"><h5>IMOLE YOUTH ACCORD MOBILIZATION OFFICIAL FIELD COLLATION</h5></nav>
     <div class="container pb-5" style="max-width: 850px;">
-        
         <div id="loginArea" class="card p-5 text-center mx-auto" style="max-width: 400px;">
             <h6>Enter Officer ID</h6>
             <input type="text" id="oid" class="form-control mb-3 text-center">
@@ -296,48 +226,23 @@ async def index():
             </div>
 
             <div class="card p-4">
-                <span class="section-label">3. Accreditation & Results Audit</span>
+                <span class="section-label">3. Accreditation & Audit</span>
                 <div class="row g-3">
-                    <div class="col-4"><label class="small">Registered Voters</label><input type="number" id="rv" class="form-control" value="0"></div>
-                    <div class="col-4"><label class="small">Accredited Voters</label><input type="number" id="ta" class="form-control" oninput="calculateTotals()"></div>
-                    <div class="col-4"><label class="small">Rejected Ballots</label><input type="number" id="rj" class="form-control" value="0" oninput="calculateTotals()"></div>
-                    <div class="col-6"><label class="small text-success fw-bold">Valid Votes</label><input type="number" id="vv" class="form-control" readonly></div>
-                    <div class="col-6"><label class="small text-primary fw-bold">Total Cast</label><input type="number" id="tc" class="form-control" readonly></div>
+                    <div class="col-4"><label class="small">Registered</label><input type="number" id="rv" class="form-control" value="0"></div>
+                    <div class="col-4"><label class="small">Accredited</label><input type="number" id="ta" class="form-control" oninput="calculateTotals()"></div>
+                    <div class="col-4"><label class="small">Rejected</label><input type="number" id="rj" class="form-control" value="0" oninput="calculateTotals()"></div>
+                    <div class="col-6"><label class="small text-success">Valid</label><input type="number" id="vv" class="form-control" readonly></div>
+                    <div class="col-6"><label class="small text-primary">Total Cast</label><input type="number" id="tc" class="form-control" readonly></div>
                 </div>
                 <div id="auditStatus" class="mt-3 p-2 rounded text-center d-none small fw-bold"></div>
             </div>
-
-            <button class="btn btn-outline-dark w-100 mb-3" onclick="getGPS()">Fix GPS Location</button>
-            <button class="btn btn-success btn-lg w-100 py-3 fw-bold" onclick="reviewSubmission()">REVIEW & UPLOAD PU RESULT</button>
+            <button class="btn btn-outline-dark w-100 mb-2" onclick="getGPS()">Fix GPS Location</button>
+            <button class="btn btn-success btn-lg w-100 py-3 fw-bold" onclick="reviewSubmission()">UPLOAD PU RESULT</button>
         </div>
     </div>
 
-    <div class="modal fade" id="reviewModal" tabindex="-1">
-        <div class="modal-dialog modal-lg">
-            <div class="modal-content">
-                <div class="modal-header"><h5>Review Results Summary</h5></div>
-                <div class="modal-body">
-                    <div class="row mb-3 border-bottom pb-2">
-                        <div class="col-6"><small>PU:</small> <div id="revPUName" class="fw-bold text-success"></div></div>
-                        <div class="col-3"><small>Accredited:</small> <div id="revAcc" class="fw-bold"></div></div>
-                        <div class="col-3"><small>Total Cast:</small> <div id="revCast" class="fw-bold"></div></div>
-                    </div>
-                    <h6 class="fw-bold">Party Scores:</h6>
-                    <div class="row g-1" id="revPartyGrid"></div>
-                </div>
-                <div class="modal-footer">
-                    <button class="btn btn-secondary" data-bs-dismiss="modal">Go Back</button>
-                    <button class="btn btn-success fw-bold" onclick="finalSubmit()">Confirm and Submit</button>
-                </div>
-            </div>
-        </div>
-    </div>
-
-    <script src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/js/bootstrap.bundle.min.js"></script>
     <script>
         let lat, lon, officerId, puData = [], wardData = [];
-        const reviewModal = new bootstrap.Modal(document.getElementById('reviewModal'));
-
         function start() {{
             officerId = document.getElementById('oid').value;
             if(!officerId) return;
@@ -348,104 +253,63 @@ async def index():
                 data.forEach(item => s.add(new Option(item.toUpperCase(), item)));
             }});
         }}
-
         function loadLGAs() {{
-            const s = document.getElementById('s').value;
-            fetch('/api/lgas/'+encodeURIComponent(s)).then(r=>r.json()).then(data=>{{
+            fetch('/api/lgas/'+encodeURIComponent(document.getElementById('s').value)).then(r=>r.json()).then(data=>{{
                 const l = document.getElementById('l'); l.innerHTML = '<option value="">LGA</option>';
                 data.forEach(item => l.add(new Option(item.toUpperCase(), item)));
             }});
         }}
-
         function loadWards() {{
-            const s = document.getElementById('s').value;
-            const lg = document.getElementById('l').value;
-            fetch(`/api/wards/${{encodeURIComponent(s)}}/${{encodeURIComponent(lg)}}`).then(r=>r.json()).then(data=>{{
+            fetch(`/api/wards/${{encodeURIComponent(document.getElementById('s').value)}}/${{encodeURIComponent(document.getElementById('l').value)}}`).then(r=>r.json()).then(data=>{{
                 wardData = data;
                 const w = document.getElementById('w'); w.innerHTML = '<option value="">WARD</option>';
                 data.forEach(item => w.add(new Option(item.name.toUpperCase(), item.name)));
             }});
         }}
-
         function loadPUs() {{
-            const s = document.getElementById('s').value;
-            const lg = document.getElementById('l').value;
             const w = document.getElementById('w').value;
             const wardObj = wardData.find(x => x.name === w);
             document.getElementById('wc').value = wardObj ? wardObj.code : '';
-            fetch(`/api/pus/${{encodeURIComponent(s)}}/${{encodeURIComponent(lg)}}/${{encodeURIComponent(w)}}`).then(r=>r.json()).then(data=>{{
+            fetch(`/api/pus/${{encodeURIComponent(document.getElementById('s').value)}}/${{encodeURIComponent(document.getElementById('l').value)}}/${{encodeURIComponent(w)}}`).then(r=>r.json()).then(data=>{{
                 puData = data;
                 const p = document.getElementById('p'); p.innerHTML = '<option value="">SELECT PU</option>';
                 data.forEach((item, idx) => p.add(new Option(item.location.toUpperCase(), idx)));
             }});
         }}
-
         function fillPU() {{
-            const idx = document.getElementById('p').value;
-            const sel = puData[idx];
+            const sel = puData[document.getElementById('p').value];
             document.getElementById('pc').value = sel.pu_code;
             document.getElementById('loc').value = sel.location.toUpperCase();
         }}
-
         function calculateTotals() {{
             let valid = 0;
             document.querySelectorAll('.party-v').forEach(i => valid += parseInt(i.value || 0));
             const rej = parseInt(document.getElementById('rj').value || 0);
             const acc = parseInt(document.getElementById('ta').value || 0);
             const cast = valid + rej;
-            
             document.getElementById('vv').value = valid;
             document.getElementById('tc').value = cast;
-
             const msg = document.getElementById('auditStatus');
-            msg.classList.remove('d-none');
             if (acc > 0 && cast > acc) {{
-                msg.innerHTML = "⚠️ ERROR: Over-voting detected!";
-                msg.className = "mt-3 p-2 bg-danger text-white rounded text-center small fw-bold";
+                msg.innerHTML = "⚠️ ERROR: Over-voting!";
+                msg.className = "mt-3 p-2 bg-danger text-white rounded text-center small fw-bold d-block";
             }} else if (cast > 0 && cast === acc) {{
                 msg.innerHTML = "✅ AUDIT BALANCED";
-                msg.className = "mt-3 p-2 bg-success text-white rounded text-center small fw-bold";
-            }} else {{ msg.classList.add('d-none'); }}
+                msg.className = "mt-3 p-2 bg-success text-white rounded text-center small fw-bold d-block";
+            }} else {{ msg.className = "d-none"; }}
         }}
-
-        function getGPS() {{
-            navigator.geolocation.getCurrentPosition(pos => {{
-                lat = pos.coords.latitude; lon = pos.coords.longitude;
-                alert("GPS Fixed!");
-            }});
-        }}
-
-        function reviewSubmission() {{
+        function getGPS() {{ navigator.geolocation.getCurrentPosition(pos => {{ lat = pos.coords.latitude; lon = pos.coords.longitude; alert("GPS Fixed!"); }}); }}
+        async function reviewSubmission() {{
             if(!lat) return alert("Please Fix GPS first");
-            document.getElementById('revPUName').innerText = document.getElementById('loc').value;
-            document.getElementById('revAcc').innerText = document.getElementById('ta').value;
-            document.getElementById('revCast').innerText = document.getElementById('tc').value;
-            
-            let grid = "";
-            document.querySelectorAll('.party-v').forEach(i => {{
-                grid += `<div class="col-4 small border p-1">${{i.dataset.p}}: <b>${{i.value}}</b></div>`;
-            }});
-            document.getElementById('revPartyGrid').innerHTML = grid;
-            reviewModal.show();
-        }}
-
-        async function finalSubmit() {{
             const v = {{}};
             document.querySelectorAll('.party-v').forEach(i => v[i.dataset.p] = parseInt(i.value || 0));
             const payload = {{
-                officer_id: officerId, 
-                state: document.getElementById('s').value, 
-                lg: document.getElementById('l').value,
-                ward: document.getElementById('w').value, 
-                ward_code: document.getElementById('wc').value,
-                pu_code: document.getElementById('pc').value, 
-                location: document.getElementById('loc').value,
-                reg_voters: parseInt(document.getElementById('rv').value || 0), 
-                total_accredited: parseInt(document.getElementById('ta').value || 0),
-                valid_votes: parseInt(document.getElementById('vv').value || 0),
-                rejected_votes: parseInt(document.getElementById('rj').value || 0),
-                total_cast: parseInt(document.getElementById('tc').value || 0),
-                lat, lon, votes: v
+                officer_id: officerId, state: document.getElementById('s').value, lg: document.getElementById('l').value,
+                ward: document.getElementById('w').value, ward_code: document.getElementById('wc').value,
+                pu_code: document.getElementById('pc').value, location: document.getElementById('loc').value,
+                reg_voters: parseInt(document.getElementById('rv').value || 0), total_accredited: parseInt(document.getElementById('ta').value || 0),
+                valid_votes: parseInt(document.getElementById('vv').value || 0), rejected_votes: parseInt(document.getElementById('rj').value || 0),
+                total_cast: parseInt(document.getElementById('tc').value || 0), lat, lon, votes: v
             }};
             const res = await fetch('/submit', {{ method: 'POST', headers: {{'Content-Type':'application/json'}}, body: JSON.stringify(payload)}});
             const out = await res.json();
@@ -457,57 +321,13 @@ async def index():
 </html>
 """
 
-# --- DASHBOARD BACKEND LOGIC ---
+# --- DASHBOARD PAGE ---
 
 @app.get("/dashboard", response_class=HTMLResponse)
 async def dashboard_page():
     return DASHBOARD_HTML
 
-@app.get("/locations/states")
-def get_dash_states():
-    return get_states()
-
-@app.get("/locations/lgas/{state}")
-def get_dash_lgas(state: str):
-    return get_lgas(state)
-
-@app.get("/locations/wards/{state}/{lga}")
-def get_dash_wards(state: str, lga: str):
-    return get_wards(state, lga)
-
-@app.get("/submissions")
-async def get_dashboard_data():
-    try:
-        with get_db() as conn:
-            with conn.cursor() as cur:
-                # 1. Correct way to execute in Psycopg2
-                cur.execute("SELECT * FROM field_submissions ORDER BY timestamp DESC")
-                rows = cur.fetchall()
-                
-                data = []
-                for r in rows:
-                    # 2. Handle votes_json (Postgres might store it as a string)
-                    votes_raw = r.get('votes_json', '{}')
-                    votes = json.loads(votes_raw) if isinstance(votes_raw, str) else votes_raw
-                    
-                    data.append({
-                        "pu_name": r.get('location'),
-                        "state": r.get('state'),
-                        "lga": r.get('lg'),
-                        "ward": r.get('ward'),
-                        "latitude": r.get('lat', 0.0),
-                        "longitude": r.get('lon', 0.0),
-                        "votes_party_ACCORD": votes.get("ACCORD", 0), 
-                        "votes_party_APC": votes.get("APC", 0),
-                        "votes_party_PDP": votes.get("PDP", 0),
-                        "votes_party_ADC": votes.get("ADC", 0),
-                        "incident_type": None 
-                    })
-                return data
-    except Exception as e:
-        print(f"DASHBOARD DATA ERROR: {e}")
-        return []
-# --- DASHBOARD HTML (FULL UPDATE) ---
+# ... [The DASHBOARD_HTML string follows exactly from your file, with the added Export button in the navbar as shown in previous sessions] ...
 DASHBOARD_HTML = """
 <!DOCTYPE html>
 <html lang="en">
