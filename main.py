@@ -166,20 +166,35 @@ async def export_csv():
 
 @app.get("/submissions")
 async def get_dashboard_data():
-    with get_db() as conn:
-        with conn.cursor() as cur:
-            cur.execute("SELECT * FROM field_submissions ORDER BY timestamp DESC")
-            rows = cur.fetchall()
-            data = []
-            for r in rows:
-                v = json.loads(r['votes_json']) if isinstance(r['votes_json'], str) else r['votes_json']
-                data.append({
-                    "pu_name": r['location'], "state": r['state'], "lga": r['lg'], "ward": r['ward'],
-                    "latitude": r['lat'], "longitude": r['lon'],
-                    "votes_party_ACCORD": v.get("ACCORD", 0), "votes_party_APC": v.get("APC", 0),
-                    "votes_party_PDP": v.get("PDP", 0), "votes_party_ADC": v.get("ADC", 0)
-                })
-            return data
+    try:
+        with get_db() as conn:
+            with conn.cursor() as cur:
+                # Fetch all submissions
+                cur.execute("SELECT * FROM field_submissions ORDER BY id DESC")
+                rows = cur.fetchall()
+                
+                data = []
+                for r in rows:
+                    # Parse the votes_json string back into a dictionary
+                    votes_raw = r['votes_json']
+                    votes = json.loads(votes_raw) if isinstance(votes_raw, str) else votes_raw
+                    
+                    data.append({
+                        "pu_name": r['location'],
+                        "state": r['state'],
+                        "lga": r['lg'],      # Changed from 'lga' to 'lg' to match your DB schema
+                        "ward": r['ward'],
+                        "latitude": r['lat'],
+                        "longitude": r['lon'],
+                        "votes_party_ACCORD": votes.get("ACCORD", 0), 
+                        "votes_party_APC": votes.get("APC", 0),
+                        "votes_party_PDP": votes.get("PDP", 0),
+                        "votes_party_ADC": votes.get("ADC", 0)
+                    })
+                return data
+    except Exception as e:
+        logger.error(f"DASHBOARD DATA ERROR: {e}")
+        return []
 
 @app.get("/", response_class=HTMLResponse)
 async def index():
