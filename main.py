@@ -137,20 +137,42 @@ async def ai_interpret(data: dict):
                 f"Currently {performance} against {top_rival} by {abs(margin):,} votes.")
     return {"analysis": analysis}
 
+@app.get("/api/dashboard_filters")
+def get_dash_filters():
+    """Helper for the header dropdowns"""
+    with get_db() as conn:
+        with conn.cursor() as cur:
+            cur.execute("SELECT DISTINCT state, lg, ward FROM polling_units ORDER BY state, lg, ward")
+            return cur.fetchall()
+
 @app.get("/export/csv")
 async def export_csv():
     with get_db() as conn:
         with conn.cursor() as cur:
             cur.execute("SELECT * FROM field_submissions ORDER BY timestamp DESC")
             rows = cur.fetchall()
+            
             output = io.StringIO()
             writer = csv.writer(output)
-            writer.writerow(["Timestamp", "Officer ID", "State", "LGA", "Ward", "PU Code", "Location", "Accredited", "ACCORD", "APC", "PDP", "ADC"])
+            
+            # 18 Parties List
+            parties = ["ACCORD", "AA", "AAC", "ADC", "ADP", "APC", "APGA", "APM", "APP", "BP", "LP", "NNPP", "NRM", "PDP", "PRP", "SDP", "YPP", "ZLP"]
+            
+            # Header
+            header = ["Timestamp", "Officer ID", "State", "LGA", "Ward", "PU Code", "Location", "Accredited", "Total Cast"] + parties
+            writer.writerow(header)
+            
             for r in rows:
                 v = json.loads(r['votes_json']) if isinstance(r['votes_json'], str) else r['votes_json']
-                writer.writerow([r['timestamp'], r['officer_id'], r['state'], r['lg'], r['ward'], r['pu_code'], r['location'], r['total_accredited'], v.get("ACCORD",0), v.get("APC",0), v.get("PDP",0), v.get("ADC",0)])
+                # Create row with metadata
+                row_data = [r['timestamp'], r['officer_id'], r['state'], r['lg'], r['ward'], r['pu_code'], r['location'], r['total_accredited'], r['total_cast']]
+                # Add votes for EVERY party (default to 0 if missing)
+                for p in parties:
+                    row_data.append(v.get(p, 0))
+                writer.writerow(row_data)
+            
             output.seek(0)
-            return StreamingResponse(output, media_type="text/csv", headers={"Content-Disposition": "attachment; filename=results.csv"})
+            return StreamingResponse(output, media_type="text/csv", headers={"Content-Disposition": "attachment; filename=election_audit_full.csv"})
 
 @app.get("/submissions")
 async def get_dashboard_data():
@@ -365,6 +387,29 @@ DASHBOARD_HTML = """
             text-decoration: none; transition: 0.3s;
         }
         .export-btn:hover { background: var(--gold); color: #000; }
+
+        <div class="chart-container"><canvas id="barChart"></canvas></div>
+    
+    <div class="chart-container"><canvas id="pieChart"></canvas></div>
+
+    <div class="margin-box">
+        <small class="text-secondary">VOTE MARGIN</small>
+        <div id="marginVal" class="margin-val">0</div>
+        <small id="marginLead" class="text-success" style="font-size:10px;">AWAITING DATA</small>
+    </div>
+
+    <div class="margin-box" style="border-top: 3px solid var(--gold);">
+        <small class="text-secondary">ACCORD TOTAL</small>
+        <div id="accordTotal" class="margin-val">0</div>
+    </div>
+</div>
+
+<div class="filter-bar">
+    <select id="fState" onchange="filterLGA()"><option value="">SELECT STATE</option></select>
+    <select id="fLGA" onchange="filterWard()"><option value="">SELECT LGA</option></select>
+    <select id="fWard" onchange="applyFilters()"><option value="">SELECT WARD</option></select>
+    <button class="btn btn-sm btn-outline-secondary" onclick="resetDashboard()">RESET</button>
+</div>
 
         /* Layout */
         .main-content { display: grid; grid-template-columns: 350px 1fr 320px; height: calc(100vh - 80px); gap: 10px; padding: 10px; }
