@@ -351,7 +351,6 @@ async def index():
 </body>
 </html>
 """
-
 # --- DASHBOARD PAGE ---
 
 @app.get("/", response_class=HTMLResponse)
