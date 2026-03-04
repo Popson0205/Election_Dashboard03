@@ -360,87 +360,69 @@ DASHBOARD_HTML = """
     <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" />
     <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/bootstrap-icons@1.11.1/font/bootstrap-icons.css">
     <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
     <style>
         :root { --gold: #ffc107; --green: #008751; --dark: #0a0a0a; --panel: #141414; }
         body { background-color: var(--dark); color: #fff; font-family: 'Segoe UI', sans-serif; overflow: hidden; height: 100vh; }
         
-        /* Navbar KPI Styling */
         .navbar-custom { background: #000; border-bottom: 2px solid var(--gold); padding: 10px 20px; display: flex; align-items: center; justify-content: space-between; }
-        .brand-section { line-height: 1.2; }
-        .brand-title { color: var(--gold); font-weight: 900; font-size: 1.2rem; letter-spacing: 1px; }
-        .brand-sub { font-size: 0.7rem; color: #888; text-transform: uppercase; }
         
-        .nav-kpi-group { display: flex; gap: 15px; }
-        .party-box { background: #1a1a1a; border: 1px solid #333; border-radius: 8px; padding: 5px 15px; display: flex; align-items: center; gap: 10px; min-width: 140px; }
-        .party-box img { height: 35px; width: 35px; object-fit: contain; }
-        .party-info label { display: block; font-size: 0.65rem; color: #aaa; margin: 0; }
-        .party-info span { font-size: 1.1rem; font-weight: bold; color: #fff; }
+        /* KPI BOXES */
+        .nav-kpi-group { display: flex; gap: 10px; }
+        .party-box { background: #1a1a1a; border: 1px solid #333; border-radius: 8px; padding: 5px 12px; display: flex; align-items: center; gap: 8px; min-width: 125px; }
+        .party-box img { height: 30px; width: 30px; object-fit: contain; }
+        .party-info label { display: block; font-size: 0.6rem; color: #aaa; margin: 0; }
+        .party-info span { font-size: 1rem; font-weight: bold; }
         
         .box-accord { border-top: 3px solid var(--gold); }
         .box-apc { border-top: 3px solid #0b3d91; }
         .box-pdp { border-top: 3px solid #d9534f; }
         .box-adc { border-top: 3px solid #138808; }
 
-        .export-btn { 
-            background: transparent; border: 1px solid var(--gold); color: var(--gold); 
-            font-size: 11px; font-weight: bold; padding: 6px 12px; border-radius: 4px; 
-            text-decoration: none; transition: 0.3s;
-        }
-        .export-btn:hover { background: var(--gold); color: #000; }
+        /* MARGIN BOX */
+        .margin-box { background: #1a1a1a; border: 1px solid #333; border-radius: 8px; padding: 5px 15px; text-align: center; min-width: 150px; border-top: 3px solid #fff; }
+        .margin-val { font-size: 1.2rem; font-weight: 900; color: var(--gold); display: block; }
 
-        <div class="chart-container"><canvas id="barChart"></canvas></div>
-    
-    <div class="chart-container"><canvas id="pieChart"></canvas></div>
-
-    <div class="margin-box">
-        <small class="text-secondary">VOTE MARGIN</small>
-        <div id="marginVal" class="margin-val">0</div>
-        <small id="marginLead" class="text-success" style="font-size:10px;">AWAITING DATA</small>
-    </div>
-
-    <div class="margin-box" style="border-top: 3px solid var(--gold);">
-        <small class="text-secondary">ACCORD TOTAL</small>
-        <div id="accordTotal" class="margin-val">0</div>
-    </div>
-</div>
-
-<div class="filter-bar">
-    <select id="fState" onchange="filterLGA()"><option value="">SELECT STATE</option></select>
-    <select id="fLGA" onchange="filterWard()"><option value="">SELECT LGA</option></select>
-    <select id="fWard" onchange="applyFilters()"><option value="">SELECT WARD</option></select>
-    <button class="btn btn-sm btn-outline-secondary" onclick="resetDashboard()">RESET</button>
-</div>
-
-        /* Layout */
-        .main-content { display: grid; grid-template-columns: 350px 1fr 320px; height: calc(100vh - 80px); gap: 10px; padding: 10px; }
+        /* MAIN LAYOUT */
+        .main-content { display: grid; grid-template-columns: 320px 1fr 320px; height: calc(100vh - 85px); gap: 10px; padding: 10px; }
         .side-panel { background: var(--panel); border-radius: 12px; display: flex; flex-direction: column; overflow: hidden; border: 1px solid #222; }
-        .panel-header { background: #1c1c1c; padding: 10px 15px; font-size: 0.8rem; font-weight: bold; color: var(--gold); border-bottom: 1px solid #333; display: flex; justify-content: space-between; }
+        .panel-header { background: #1c1c1c; padding: 10px 15px; font-size: 0.75rem; font-weight: bold; color: var(--gold); border-bottom: 1px solid #333; text-transform: uppercase; }
         
-        /* Map & Feed */
-        #map { height: 100%; border-radius: 12px; background: #111; }
+        #map { height: 45%; border-radius: 12px; margin: 5px; background: #111; }
+        .chart-container { height: 220px; padding: 10px; background: #000; margin: 5px; border-radius: 8px; }
+        
         .feed-container { flex: 1; overflow-y: auto; padding: 10px; }
-        .pu-card { background: #1e1e1e; border-radius: 8px; padding: 12px; margin-bottom: 10px; border-left: 4px solid var(--gold); cursor: pointer; transition: 0.2s; }
-        .pu-card:hover { background: #252525; }
-        .pu-card h6 { font-size: 0.85rem; margin-bottom: 4px; color: var(--gold); }
-        .pu-card small { font-size: 0.7rem; color: #888; display: block; }
-        
-        .score-grid { display: grid; grid-template-columns: repeat(4, 1fr); gap: 5px; margin-top: 8px; border-top: 1px solid #333; pt: 8px; }
-        .grid-val { text-align: center; }
-        .grid-val small { font-size: 0.6rem; color: #666; }
-        .grid-val span { display: block; font-size: 0.8rem; font-weight: bold; }
+        .pu-card { background: #1e1e1e; border-radius: 8px; padding: 10px; margin-bottom: 8px; border-left: 4px solid var(--gold); cursor: pointer; }
+        .score-grid { display: grid; grid-template-columns: repeat(4, 1fr); gap: 5px; margin-top: 5px; }
+        .grid-val { text-align: center; font-size: 0.75rem; }
 
-        .ai-box { background: #000; color: #0f0; font-family: monospace; padding: 15px; font-size: 0.8rem; border: 1px solid #030; height: 120px; overflow-y: auto; }
+        .export-btn { background: transparent; border: 1px solid var(--gold); color: var(--gold); font-size: 10px; font-weight: bold; padding: 5px 10px; border-radius: 4px; text-decoration: none; }
     </style>
 </head>
 <body>
 
 <nav class="navbar-custom">
     <div class="brand-section">
-        <div class="brand-title">ACCORD ELECTION SITUATION ROOM</div>
-        <div class="brand-sub">National Command & Intelligence Center</div>
-        <a href="/export/csv" class="export-btn mt-2 d-inline-block">
-            <i class="bi bi-download"></i> EXPORT DATABASE (CSV)
-        </a>
+        <div class="brand-title">ACCORD HQ</div>
+        <a href="/export/csv" class="export-btn mt-1 d-inline-block">EXPORT CSV</a>
+    </div>
+
+    <div class="d-flex gap-2">
+        <select id="fState" class="form-select form-select-sm bg-dark text-white border-secondary" style="width:130px;" onchange="filterLGA()">
+            <option value="">ALL STATES</option>
+        </select>
+        <select id="fLGA" class="form-select form-select-sm bg-dark text-white border-secondary" style="width:130px;" onchange="filterWard()">
+            <option value="">ALL LGAS</option>
+        </select>
+        <select id="fWard" class="form-select form-select-sm bg-dark text-white border-secondary" style="width:130px;" onchange="applyFilters()">
+            <option value="">ALL WARDS</option>
+        </select>
+    </div>
+
+    <div class="margin-box">
+        <small class="text-secondary" style="font-size:10px;">VOTE MARGIN</small>
+        <span id="marginVal" class="margin-val">0</span>
+        <small id="marginLead" style="font-size:9px;">AWAITING DATA</small>
     </div>
 
     <div class="nav-kpi-group">
@@ -461,128 +443,165 @@ DASHBOARD_HTML = """
             <div class="party-info"><label>ADC</label><span id="nav-ADC">0</span></div>
         </div>
     </div>
-
-    <div class="filter-group d-flex gap-2">
-        <select id="stateFilter" class="form-select form-select-sm bg-dark text-white border-secondary" style="width:120px;" onchange="updateLGAs()">
-            <option value="">All States</option>
-        </select>
-        <button class="btn btn-sm btn-outline-secondary" onclick="resetFilters()"><i class="bi bi-arrow-clockwise"></i></button>
-    </div>
 </nav>
 
 <div class="main-content">
     <div class="side-panel">
-        <div class="panel-header"><span>LIVE PU FEED</span> <span id="pu-count" class="badge bg-warning text-dark">0</span></div>
-        <div class="px-2 pt-2"><input type="text" id="puSearch" class="form-control form-control-sm bg-dark text-white border-secondary" placeholder="Search Polling Unit..." oninput="renderFeed()"></div>
+        <div class="panel-header">LIVE FIELD FEED</div>
+        <div class="px-2 pt-2"><input type="text" id="puSearch" class="form-control form-control-sm bg-dark text-white border-secondary" placeholder="Search PU..." oninput="applyFilters()"></div>
         <div class="feed-container" id="feedList"></div>
     </div>
 
-    <div id="map"></div>
+    <div class="d-flex flex-column" style="gap:10px;">
+        <div id="map"></div>
+        <div class="d-flex" style="gap:10px; height: 50%;">
+            <div class="side-panel flex-fill">
+                <div class="panel-header">VOTE DISTRIBUTION (PIE)</div>
+                <div class="chart-container"><canvas id="pieChart"></canvas></div>
+            </div>
+            <div class="side-panel flex-fill">
+                <div class="panel-header">PARTY PERFORMANCE (BAR)</div>
+                <div class="chart-container"><canvas id="barChart"></canvas></div>
+            </div>
+        </div>
+    </div>
 
     <div class="side-panel">
-        <div class="panel-header">AI ANALYTICS INTERPRETATION</div>
-        <div class="ai-box" id="ai_box">Awaiting data stream for statistical analysis...</div>
-        
-        <div class="panel-header mt-auto">SYSTEM LOGS</div>
-        <div class="p-3" style="font-size:0.7rem; color:#666;">
-            Database: PostgreSQL<br>
-            Status: Connected<br>
-            Encryption: SSL Enabled<br>
-            Last Sync: <span id="sync-time">Just now</span>
+        <div class="panel-header">AI INTERPRETATION</div>
+        <div class="ai-box p-3" id="ai_box" style="font-size:0.8rem; font-family:monospace; color:#0f0;">Analyzing...</div>
+        <div class="panel-header mt-auto">SYSTEM STATUS</div>
+        <div class="p-3 small text-secondary">
+            PostgreSQL: Connected<br>
+            Last Sync: <span id="sync-time">--</span><br>
+            Entries: <span id="pu-count">0</span>
         </div>
-        <button class="btn btn-warning btn-sm m-3 fw-bold" onclick="runAI()">REFRESH AI AUDIT</button>
+        <button class="btn btn-warning btn-sm m-3 fw-bold" onclick="refreshData()">FORCE REFRESH</button>
     </div>
 </div>
 
 <script>
-    let map, globalData = [], markers = [];
-    
+    let map, globalData = [], filterLookup = [], markers = [], barChart, pieChart;
+
     function initMap() {
         map = L.map('map', { zoomControl: false }).setView([9.082, 8.675], 6);
-        L.tileLayer('https://{s}.basemaps.cartocdn.com/dark_all/{z}/{x}/{y}{r}.png').addTo(map);
+        L.tileLayer('https://{{s}}.basemaps.cartocdn.com/dark_all/{{z}}/{{x}}/{{y}}{{r}}.png').addTo(map);
+    }
+
+    async function loadFilters() {
+        const res = await fetch('/api/dashboard_filters');
+        filterLookup = await res.json();
+        const states = [...new Set(filterLookup.map(x => x.state))];
+        const sEl = document.getElementById('fState');
+        states.forEach(s => sEl.add(new Option(s.toUpperCase(), s)));
+    }
+
+    function filterLGA() {
+        const s = document.getElementById('fState').value;
+        const lEl = document.getElementById('fLGA'); lEl.innerHTML = '<option value="">ALL LGAS</option>';
+        const lgAs = [...new Set(filterLookup.filter(x => x.state === s).map(x => x.lg))];
+        lgAs.forEach(l => lEl.add(new Option(l.toUpperCase(), l)));
+        applyFilters();
+    }
+
+    function filterWard() {
+        const s = document.getElementById('fState').value;
+        const l = document.getElementById('fLGA').value;
+        const wEl = document.getElementById('fWard'); wEl.innerHTML = '<option value="">ALL WARDS</option>';
+        const wards = [...new Set(filterLookup.filter(x => x.state === s && x.lg === l).map(x => x.ward))];
+        wards.forEach(w => wEl.add(new Option(w.toUpperCase(), w)));
+        applyFilters();
     }
 
     async function refreshData() {
-        try {
-            const res = await fetch('/submissions');
-            globalData = await res.json();
-            
-            // Calculate Global Totals
-            let totals = { ACCORD: 0, APC: 0, PDP: 0, ADC: 0 };
-            globalData.forEach(d => {
-                totals.ACCORD += d.votes_party_ACCORD;
-                totals.APC += d.votes_party_APC;
-                totals.PDP += d.votes_party_PDP;
-                totals.ADC += d.votes_party_ADC;
-            });
-
-            document.getElementById('nav-ACCORD').innerText = totals.ACCORD.toLocaleString();
-            document.getElementById('nav-APC').innerText = totals.APC.toLocaleString();
-            document.getElementById('nav-PDP').innerText = totals.PDP.toLocaleString();
-            document.getElementById('nav-ADC').innerText = totals.ADC.toLocaleString();
-            document.getElementById('pu-count').innerText = globalData.length;
-            document.getElementById('sync-time').innerText = new Date().toLocaleTimeString();
-
-            updateMap();
-            renderFeed();
-        } catch(e) { console.error("Data fetch error", e); }
+        const res = await fetch('/submissions');
+        globalData = await res.json();
+        applyFilters();
     }
 
-    function updateMap() {
-        markers.forEach(m => map.removeLayer(m));
-        markers = [];
-        globalData.forEach(d => {
-            if(d.latitude && d.longitude) {
-                const m = L.circleMarker([d.latitude, d.longitude], {
-                    radius: 6, color: '#ffc107', fillOpacity: 0.8
-                }).addTo(map).bindPopup(`<b>${d.pu_name}</b><br>ACCORD: ${d.votes_party_ACCORD}`);
-                markers.push(m);
-            }
-        });
+    function applyFilters() {
+        const s = document.getElementById('fState').value;
+        const l = document.getElementById('fLGA').value;
+        const w = document.getElementById('fWard').value;
+        const q = document.getElementById('puSearch').value.toLowerCase();
+
+        let filtered = globalData;
+        if(s) filtered = filtered.filter(x => x.state === s);
+        if(l) filtered = filtered.filter(x => x.lga === l);
+        if(w) filtered = filtered.filter(x => x.ward === w);
+        if(q) filtered = filtered.filter(x => x.pu_name.toLowerCase().includes(q));
+
+        updateUI(filtered);
     }
 
-    function renderFeed() {
-        const list = document.getElementById('feedList');
-        const search = document.getElementById('puSearch').value.toLowerCase();
-        list.innerHTML = "";
-        
-        globalData.filter(d => d.pu_name.toLowerCase().includes(search)).forEach(d => {
-            const card = document.createElement('div');
-            card.className = 'pu-card';
-            card.innerHTML = `
-                <h6>${d.pu_name}</h6>
-                <small>${d.lga} | ${d.ward}</small>
-                <div class="score-grid">
-                    <div class="grid-val"><small>ACC</small><span class="text-warning">${d.votes_party_ACCORD}</span></div>
-                    <div class="grid-val"><small>APC</small><span>${d.votes_party_APC}</span></div>
-                    <div class="grid-val"><small>PDP</small><span>${d.votes_party_PDP}</span></div>
-                    <div class="grid-val"><small>ADC</small><span>${d.votes_party_ADC}</span></div>
-                </div>
-            `;
-            card.onclick = () => { if(d.latitude) map.setView([d.latitude, d.longitude], 13); };
-            list.appendChild(card);
-        });
-    }
-
-    async function runAI() {
+    function updateUI(data) {
         let totals = { ACCORD: 0, APC: 0, PDP: 0, ADC: 0 };
-        globalData.forEach(d => {
+        const list = document.getElementById('feedList');
+        list.innerHTML = "";
+        markers.forEach(m => map.removeLayer(m));
+
+        data.forEach(d => {
             totals.ACCORD += d.votes_party_ACCORD;
             totals.APC += d.votes_party_APC;
             totals.PDP += d.votes_party_PDP;
             totals.ADC += d.votes_party_ADC;
+
+            const card = document.createElement('div');
+            card.className = 'pu-card';
+            card.innerHTML = `<h6>${d.pu_name}</h6><div class="score-grid">
+                <div class="grid-val text-warning">A: ${d.votes_party_ACCORD}</div>
+                <div class="grid-val">P: ${d.votes_party_APC}</div>
+                <div class="grid-val">D: ${d.votes_party_PDP}</div>
+                <div class="grid-val">C: ${d.votes_party_ADC}</div>
+            </div>`;
+            card.onclick = () => { if(d.latitude) map.setView([d.latitude, d.longitude], 14); };
+            list.appendChild(card);
+
+            if(d.latitude) {{
+                const m = L.circleMarker([d.latitude, d.longitude], {{ radius: 6, color: '#ffc107', fillOpacity: 0.8 }}).addTo(map);
+                markers.push(m);
+            }}
         });
-        const res = await fetch("/api/ai_interpret", {
-            method: 'POST', headers: {'Content-Type': 'application/json'},
-            body: JSON.stringify(totals)
-        });
-        const out = await res.json();
-        document.getElementById('ai_box').innerText = out.analysis;
+
+        // Update KPI Header
+        document.getElementById('nav-ACCORD').innerText = totals.ACCORD.toLocaleString();
+        document.getElementById('nav-APC').innerText = totals.APC.toLocaleString();
+        document.getElementById('nav-PDP').innerText = totals.PDP.toLocaleString();
+        document.getElementById('nav-ADC').innerText = totals.ADC.toLocaleString();
+        document.getElementById('pu-count').innerText = data.length;
+        document.getElementById('sync-time').innerText = new Date().toLocaleTimeString();
+
+        // Update Margin
+        const rivals = {{ "APC": totals.APC, "PDP": totals.PDP, "ADC": totals.ADC }};
+        const topRival = Object.keys(rivals).reduce((a, b) => rivals[a] > rivals[b] ? a : b);
+        const margin = totals.ACCORD - rivals[topRival];
+        document.getElementById('marginVal').innerText = Math.abs(margin).toLocaleString();
+        document.getElementById('marginLead').innerText = margin >= 0 ? `LEAD OVER ${{topRival}}` : `BEHIND ${{topRival}}`;
+        document.getElementById('marginLead').className = margin >= 0 ? "text-success" : "text-danger";
+
+        updateCharts(totals);
+    }
+
+    function updateCharts(s) {
+        const chartData = {{
+            labels: ['ACCORD', 'APC', 'PDP', 'ADC'],
+            datasets: [{{
+                data: [s.ACCORD, s.APC, s.PDP, s.ADC],
+                backgroundColor: ['#ffc107', '#0b3d91', '#d9534f', '#138808'],
+                borderWidth: 0
+            }}]
+        }};
+
+        if(barChart) barChart.destroy();
+        barChart = new Chart(document.getElementById('barChart'), {{ type: 'bar', data: chartData, options: {{ maintainAspectRatio: false, plugins: {{ legend: {{ display: false }} }} }} }});
+
+        if(pieChart) pieChart.destroy();
+        pieChart = new Chart(document.getElementById('pieChart'), {{ type: 'doughnut', data: chartData, options: {{ maintainAspectRatio: false, plugins: {{ legend: {{ position: 'bottom', labels: {{ color: '#fff' }} }} }} }} }});
     }
 
     initMap();
+    loadFilters();
     refreshData();
-    setInterval(refreshData, 15000);
+    setInterval(refreshData, 20000);
 </script>
 </body>
 </html>
