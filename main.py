@@ -139,7 +139,6 @@ async def ai_interpret(data: dict):
 
 @app.get("/api/dashboard_filters")
 def get_dash_filters():
-    """Helper for the header dropdowns"""
     with get_db() as conn:
         with conn.cursor() as cur:
             cur.execute("SELECT DISTINCT state, lg, ward FROM polling_units ORDER BY state, lg, ward")
@@ -151,26 +150,17 @@ async def export_csv():
         with conn.cursor() as cur:
             cur.execute("SELECT * FROM field_submissions ORDER BY timestamp DESC")
             rows = cur.fetchall()
-            
             output = io.StringIO()
             writer = csv.writer(output)
-            
-            # 18 Parties List
             parties = ["ACCORD", "AA", "AAC", "ADC", "ADP", "APC", "APGA", "APM", "APP", "BP", "LP", "NNPP", "NRM", "PDP", "PRP", "SDP", "YPP", "ZLP"]
-            
-            # Header
             header = ["Timestamp", "Officer ID", "State", "LGA", "Ward", "PU Code", "Location", "Accredited", "Total Cast"] + parties
             writer.writerow(header)
-            
             for r in rows:
                 v = json.loads(r['votes_json']) if isinstance(r['votes_json'], str) else r['votes_json']
-                # Create row with metadata
                 row_data = [r['timestamp'], r['officer_id'], r['state'], r['lg'], r['ward'], r['pu_code'], r['location'], r['total_accredited'], r['total_cast']]
-                # Add votes for EVERY party (default to 0 if missing)
                 for p in parties:
                     row_data.append(v.get(p, 0))
                 writer.writerow(row_data)
-            
             output.seek(0)
             return StreamingResponse(output, media_type="text/csv", headers={"Content-Disposition": "attachment; filename=election_audit_full.csv"})
 
@@ -190,6 +180,7 @@ async def get_dashboard_data():
                     "votes_party_PDP": v.get("PDP", 0), "votes_party_ADC": v.get("ADC", 0)
                 })
             return data
+
 @app.get("/", response_class=HTMLResponse)
 async def index():
     parties = ["ACCORD", "AA", "AAC", "ADC", "ADP", "APC", "APGA", "APM", "APP", "BP", "LP", "NNPP", "NRM", "PDP", "PRP", "SDP", "YPP", "ZLP"]
