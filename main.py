@@ -351,10 +351,20 @@ async def index():
 
 # --- DASHBOARD PAGE ---
 
-@app.get("/dashboard", response_class=HTMLResponse)
-async def dashboard_page():
-    return DASHBOARD_HTML
+@app.get("/", response_class=HTMLResponse)
+async def index():
+    parties = ["ACCORD", "AA", "AAC", "ADC", "ADP", "APC", "APGA", "APM", "APP", "BP", "LP", "NNPP", "NRM", "PDP", "PRP", "SDP", "YPP", "ZLP"]
+    party_cards = "".join([f'''
+        <div class="col-4 col-md-2 mb-2">
+            <div class="p-2 border rounded text-center bg-white shadow-sm">
+                <img src="/logos/{p}.png" onerror="this.src='https://via.placeholder.com/30?text={p}'" style="height:30px">
+                <small class="d-block fw-bold">{p}</small>
+                <input type="number" class="form-control form-control-sm party-v text-center" data-p="{p}" value="0" oninput="calculateTotals()">
+            </div>
+        </div>''' for p in parties])
 
+    # Note the use of {{{{ to produce {{ and { to produce { in the f-string
+    return f"""
 # ... [The DASHBOARD_HTML string follows exactly from your file, with the added Export button in the navbar as shown in previous sessions] ...
 DASHBOARD_HTML = """
 <!DOCTYPE html>
