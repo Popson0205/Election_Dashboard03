@@ -221,6 +221,7 @@ async def index():
         .section-label {{ font-size: 0.75rem; font-weight: bold; color: #008751; text-transform: uppercase; border-left: 3px solid #ffc107; padding-left: 10px; margin-bottom: 15px; display: block; }}
         input[readonly] {{ background-color: #e9ecef !important; font-weight: bold; }}
         #loginArea {{ margin-top: 100px; }}
+        .nav-kpi-group {{ display: flex; gap: 10px; }}
     </style>
 </head>
 <body>
@@ -288,24 +289,26 @@ async def index():
             }});
         }}
         function loadWards() {{
-            fetch(`/api/wards/${{encodeURIComponent(document.getElementById('s').value)}}/${{encodeURIComponent(document.getElementById('l').value)}}`).then(r=>r.json()).then(data=>{{
+            fetch('/api/wards/'+encodeURIComponent(document.getElementById('s').value)+'/'+encodeURIComponent(document.getElementById('l').value)).then(r=>r.json()).then(data=>{{
                 wardData = data;
                 const w = document.getElementById('w'); w.innerHTML = '<option value="">WARD</option>';
                 data.forEach(item => w.add(new Option(item.name.toUpperCase(), item.name)));
             }});
         }}
         function loadPUs() {{
-            const w = document.getElementById('w').value;
-            const wardObj = wardData.find(x => x.name === w);
+            const wVal = document.getElementById('w').value;
+            const wardObj = wardData.find(x => x.name === wVal);
             document.getElementById('wc').value = wardObj ? wardObj.code : '';
-            fetch(`/api/pus/${{encodeURIComponent(document.getElementById('s').value)}}/${{encodeURIComponent(document.getElementById('l').value)}}/${{encodeURIComponent(w)}}`).then(r=>r.json()).then(data=>{{
+            fetch('/api/pus/'+encodeURIComponent(document.getElementById('s').value)+'/'+encodeURIComponent(document.getElementById('l').value)+'/'+encodeURIComponent(wVal)).then(r=>r.json()).then(data=>{{
                 puData = data;
                 const p = document.getElementById('p'); p.innerHTML = '<option value="">SELECT PU</option>';
                 data.forEach((item, idx) => p.add(new Option(item.location.toUpperCase(), idx)));
             }});
         }}
         function fillPU() {{
-            const sel = puData[document.getElementById('p').value];
+            const idx = document.getElementById('p').value;
+            if(idx === "") return;
+            const sel = puData[idx];
             document.getElementById('pc').value = sel.pu_code;
             document.getElementById('loc').value = sel.location.toUpperCase();
         }}
