@@ -22,7 +22,6 @@ LOGO_PATH = os.path.join(os.getcwd(), "static", "logos")
 if os.path.exists(LOGO_PATH):
     app.mount("/logos", StaticFiles(directory=LOGO_PATH), name="logos")
 
-# Ensure general static files (like /static/bg.png) are servable
 STATIC_PATH = os.path.join(os.getcwd(), "static")
 if os.path.exists(STATIC_PATH):
     app.mount("/static", StaticFiles(directory=STATIC_PATH), name="static")
@@ -33,7 +32,6 @@ DATABASE_URL = os.environ.get("DATABASE_URL", "postgresql://election_v3_db_user:
 def get_db():
     return psycopg2.connect(DATABASE_URL, cursor_factory=RealDictCursor)
 
-# --- DATABASE INITIALIZATION ---
 def init_db():
     try:
         conn = get_db()
@@ -78,7 +76,7 @@ def get_states():
             rows = cur.fetchall()
             return [r["state"] for r in rows]
 
-@app.get("/api/lgas/{{state}}")
+@app.get("/api/lgas/{state}")
 def get_lgas(state: str):
     with get_db() as conn:
         with conn.cursor() as cur:
@@ -86,7 +84,7 @@ def get_lgas(state: str):
             rows = cur.fetchall()
             return [r["lg"] for r in rows]
 
-@app.get("/api/wards/{{state}}/{{lg}}")
+@app.get("/api/wards/{state}/{lg}")
 def get_wards(state: str, lg: str):
     with get_db() as conn:
         with conn.cursor() as cur:
@@ -94,7 +92,7 @@ def get_wards(state: str, lg: str):
             rows = cur.fetchall()
             return [{"name": r["ward"], "code": r["ward_code"]} for r in rows]
 
-@app.get("/api/pus/{{state}}/{{lg}}/{{ward}}")
+@app.get("/api/pus/{state}/{lg}/{ward}")
 def get_pus(state: str, lg: str, ward: str):
     with get_db() as conn:
         with conn.cursor() as cur:
@@ -149,7 +147,7 @@ async def export_csv():
                 v = json.loads(r['votes_json']) if isinstance(r['votes_json'], str) else r['votes_json']
                 writer.writerow([r['timestamp'], r['officer_id'], r['state'], r['lg'], r['ward'], r['pu_code'], r['location'], r['reg_voters'], r['total_accredited'], r['total_cast'], v.get("ACCORD", 0), v.get("APC", 0), v.get("PDP", 0), v.get("ADC", 0)])
             output.seek(0)
-            return StreamingResponse(output, media_type="text/csv", headers={{"Content-Disposition": "attachment; filename=results.csv"}})
+            return StreamingResponse(output, media_type="text/csv", headers={"Content-Disposition": "attachment; filename=results.csv"})
 
 @app.get("/", response_class=HTMLResponse)
 async def index():
@@ -175,7 +173,7 @@ async def index():
         .card {{ background: rgba(255, 255, 255, 0.95) !important; border-radius: 12px; border: none; box-shadow: 0 10px 30px rgba(0,0,0,0.3) !important; margin-bottom: 20px; color: #222; }}
         .section-label {{ font-size: 0.75rem; font-weight: bold; color: #008751; text-transform: uppercase; border-left: 3px solid #ffc107; padding-left: 10px; margin-bottom: 15px; display: block; }}
         input[readonly] {{ background-color: #e9ecef !important; font-weight: bold; }}
-        #loginArea {{ margin-top: 100px; border: 1px solid rgba(255,255,255,0.2); }}
+        #loginArea {{ margin-top: 100px; }}
     </style>
 </head>
 <body>
@@ -208,45 +206,20 @@ async def index():
             <div class="card p-4">
                 <span class="section-label">3. Accreditation & Results Audit</span>
                 <div class="row g-3">
-                    <div class="col-4"><label class="small">Registered Voters</label><input type="number" id="rv" class="form-control" value="0"></div>
-                    <div class="col-4"><label class="small">Accredited Voters</label><input type="number" id="ta" class="form-control" oninput="calculateTotals()"></div>
-                    <div class="col-4"><label class="small">Rejected Ballots</label><input type="number" id="rj" class="form-control" value="0" oninput="calculateTotals()"></div>
-                    <div class="col-6"><label class="small text-success fw-bold">Valid Votes</label><input type="number" id="vv" class="form-control" readonly></div>
-                    <div class="col-6"><label class="small text-primary fw-bold">Total Cast</label><input type="number" id="tc" class="form-control" readonly></div>
+                    <div class="col-4"><label class="small">Registered</label><input type="number" id="rv" class="form-control" value="0"></div>
+                    <div class="col-4"><label class="small">Accredited</label><input type="number" id="ta" class="form-control" oninput="calculateTotals()"></div>
+                    <div class="col-4"><label class="small">Rejected</label><input type="number" id="rj" class="form-control" value="0" oninput="calculateTotals()"></div>
+                    <div class="col-6"><label class="small text-success">Valid</label><input type="number" id="vv" class="form-control" readonly></div>
+                    <div class="col-6"><label class="small text-primary">Total Cast</label><input type="number" id="tc" class="form-control" readonly></div>
                 </div>
                 <div id="auditStatus" class="mt-3 p-2 rounded text-center d-none small fw-bold"></div>
             </div>
-            <button class="btn btn-outline-dark w-100 mb-3" onclick="getGPS()">Fix GPS Location</button>
-            <button class="btn btn-success btn-lg w-100 py-3 fw-bold" onclick="reviewSubmission()">REVIEW & UPLOAD PU RESULT</button>
+            <button class="btn btn-outline-dark w-100 mb-2" onclick="getGPS()">Fix GPS Location</button>
+            <button class="btn btn-success btn-lg w-100 py-3 fw-bold" onclick="reviewSubmission()">UPLOAD PU RESULT</button>
         </div>
     </div>
-
-    <div class="modal fade" id="reviewModal" tabindex="-1">
-        <div class="modal-dialog modal-lg">
-            <div class="modal-content">
-                <div class="modal-header" style="background: #008751; color: white;"><h5>Review Results Summary</h5></div>
-                <div class="modal-body">
-                    <div class="row mb-3 border-bottom pb-2">
-                        <div class="col-6"><small>PU:</small> <div id="revPUName" class="fw-bold text-success"></div></div>
-                        <div class="col-3"><small>Accredited:</small> <div id="revAcc" class="fw-bold"></div></div>
-                        <div class="col-3"><small>Total Cast:</small> <div id="revCast" class="fw-bold"></div></div>
-                    </div>
-                    <h6 class="fw-bold">Party Scores:</h6>
-                    <div class="row g-1" id="revPartyGrid"></div>
-                </div>
-                <div class="modal-footer">
-                    <button class="btn btn-secondary" data-bs-dismiss="modal">Go Back</button>
-                    <button class="btn btn-success fw-bold" onclick="finalSubmit()">Confirm and Submit</button>
-                </div>
-            </div>
-        </div>
-    </div>
-
-    <script src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/js/bootstrap.bundle.min.js"></script>
     <script>
         let lat, lon, officerId, puData = [], wardData = [];
-        const reviewModal = new bootstrap.Modal(document.getElementById('reviewModal'));
-
         function start() {{
             officerId = document.getElementById('oid').value;
             if(!officerId) return;
@@ -257,68 +230,53 @@ async def index():
                 data.forEach(item => s.add(new Option(item.toUpperCase(), item)));
             }});
         }}
-
         function loadLGAs() {{
             fetch('/api/lgas/'+encodeURIComponent(document.getElementById('s').value)).then(r=>r.json()).then(data=>{{
                 const l = document.getElementById('l'); l.innerHTML = '<option value="">LGA</option>';
                 data.forEach(item => l.add(new Option(item.toUpperCase(), item)));
             }});
         }}
-
         function loadWards() {{
-            fetch(`/api/wards/${{encodeURIComponent(document.getElementById('s').value)}}/${{encodeURIComponent(document.getElementById('l').value)}}`).then(r=>r.json()).then(data=>{{
+            fetch('/api/wards/'+encodeURIComponent(document.getElementById('s').value)+'/'+encodeURIComponent(document.getElementById('l').value)).then(r=>r.json()).then(data=>{{
                 wardData = data;
                 const w = document.getElementById('w'); w.innerHTML = '<option value="">WARD</option>';
                 data.forEach(item => w.add(new Option(item.name.toUpperCase(), item.name)));
             }});
         }}
-
         function loadPUs() {{
-            const w = document.getElementById('w').value;
-            const wardObj = wardData.find(x => x.name === w);
+            const wVal = document.getElementById('w').value;
+            const wardObj = wardData.find(x => x.name === wVal);
             document.getElementById('wc').value = wardObj ? wardObj.code : '';
-            fetch(`/api/pus/${{encodeURIComponent(document.getElementById('s').value)}}/${{encodeURIComponent(document.getElementById('l').value)}}/${{encodeURIComponent(w)}}`).then(r=>r.json()).then(data=>{{
+            fetch('/api/pus/'+encodeURIComponent(document.getElementById('s').value)+'/'+encodeURIComponent(document.getElementById('l').value)+'/'+encodeURIComponent(wVal)).then(r=>r.json()).then(data=>{{
                 puData = data;
                 const p = document.getElementById('p'); p.innerHTML = '<option value="">SELECT PU</option>';
                 data.forEach((item, idx) => p.add(new Option(item.location.toUpperCase(), idx)));
             }});
         }}
-
         function fillPU() {{
             const idx = document.getElementById('p').value;
+            if(idx === "") return;
             const sel = puData[idx];
             document.getElementById('pc').value = sel.pu_code;
             document.getElementById('loc').value = sel.location.toUpperCase();
         }}
-
         function calculateTotals() {{
             let v = 0; document.querySelectorAll('.party-v').forEach(i => v += parseInt(i.value || 0));
             const r = parseInt(document.getElementById('rj').value || 0);
             const a = parseInt(document.getElementById('ta').value || 0);
             const c = v + r;
             document.getElementById('vv').value = v; document.getElementById('tc').value = c;
-            const m = document.getElementById('auditStatus');
-            if (a > 0 && c > a) {{ m.innerHTML = "⚠️ ERROR: Over-voting!"; m.className = "mt-3 p-2 bg-danger text-white rounded text-center small fw-bold d-block"; }}
-            else if (c > 0 && c === a) {{ m.innerHTML = "✅ AUDIT BALANCED"; m.className = "mt-3 p-2 bg-success text-white rounded text-center small fw-bold d-block"; }}
-            else {{ m.className = "d-none"; }}
+            const msg = document.getElementById('auditStatus');
+            if (a > 0 && c > a) {{ msg.innerHTML = "⚠️ ERROR: Over-voting!"; msg.className = "mt-3 p-2 bg-danger text-white rounded text-center small fw-bold d-block"; }}
+            else if (c > 0 && c === a) {{ msg.innerHTML = "✅ AUDIT BALANCED"; msg.className = "mt-3 p-2 bg-success text-white rounded text-center small fw-bold d-block"; }}
+            else {{ msg.className = "d-none"; }}
         }}
-
-        function getGPS() {{ navigator.geolocation.getCurrentPosition(p => {{ lat = p.coords.latitude; lon = p.coords.longitude; alert("GPS Fixed!"); }}); }}
-
-        function reviewSubmission() {{
+        function getGPS() {{ navigator.geolocation.getCurrentPosition(pos => {{ lat = pos.coords.latitude; lon = pos.coords.longitude; alert("GPS Fixed!"); }}); }}
+        async function reviewSubmission() {{
             if(!lat) return alert("Please Fix GPS first");
-            document.getElementById('revPUName').innerText = document.getElementById('loc').value;
-            document.getElementById('revAcc').innerText = document.getElementById('ta').value;
-            document.getElementById('revCast').innerText = document.getElementById('tc').value;
-            let g = ""; document.querySelectorAll('.party-v').forEach(i => {{ g += `<div class="col-4 small border p-1">${{i.dataset.p}}: <b>${{i.value}}</b></div>`; }});
-            document.getElementById('revPartyGrid').innerHTML = g;
-            reviewModal.show();
-        }}
-
-        async function finalSubmit() {{
             const v = {{}}; document.querySelectorAll('.party-v').forEach(i => v[i.dataset.p] = parseInt(i.value || 0));
-            const p = {{ officer_id: officerId, state: document.getElementById('s').value, lg: document.getElementById('l').value, ward: document.getElementById('w').value, ward_code: document.getElementById('wc').value, pu_code: document.getElementById('pc').value, location: document.getElementById('loc').value, reg_voters: parseInt(document.getElementById('rv').value || 0), total_accredited: parseInt(document.getElementById('ta').value || 0), valid_votes: parseInt(document.getElementById('vv').value || 0), rejected_votes: parseInt(document.getElementById('rj').value || 0), total_cast: parseInt(document.getElementById('tc').value || 0), lat, lon, votes: v }};
-            const res = await fetch('/submit', {{ method: 'POST', headers: {{'Content-Type':'application/json'}}, body: JSON.stringify(p)}});
+            const payload = {{ officer_id: officerId, state: document.getElementById('s').value, lg: document.getElementById('l').value, ward: document.getElementById('w').value, ward_code: document.getElementById('wc').value, pu_code: document.getElementById('pc').value, location: document.getElementById('loc').value, reg_voters: parseInt(document.getElementById('rv').value || 0), total_accredited: parseInt(document.getElementById('ta').value || 0), valid_votes: parseInt(document.getElementById('vv').value || 0), rejected_votes: parseInt(document.getElementById('rj').value || 0), total_cast: parseInt(document.getElementById('tc').value || 0), lat, lon, votes: v }};
+            const res = await fetch('/submit', {{ method: 'POST', headers: {{'Content-Type':'application/json'}}, body: JSON.stringify(payload)}});
             const out = await res.json(); alert(out.message); if(out.status === 'success') location.reload();
         }}
     </script>
@@ -334,11 +292,11 @@ async def dashboard_page():
 def get_dash_states():
     return get_states()
 
-@app.get("/locations/lgas/{{state}}")
+@app.get("/locations/lgas/{state}")
 def get_dash_lgas(state: str):
     return get_lgas(state)
 
-@app.get("/locations/wards/{{state}}/{{lga}}")
+@app.get("/locations/wards/{state}/{lga}")
 def get_dash_wards(state: str, lga: str):
     return get_wards(state, lga)
 
@@ -351,11 +309,18 @@ async def get_dashboard_data():
                 rows = cur.fetchall()
                 data = []
                 for r in rows:
-                    v_raw = r.get('votes_json', '{{}}')
+                    v_raw = r.get('votes_json', '{}')
                     v = json.loads(v_raw) if isinstance(v_raw, str) else v_raw
-                    data.append({{ "pu_name": r.get('location'), "state": r.get('state'), "lga": r.get('lg'), "ward": r.get('ward'), "latitude": r.get('lat', 0.0), "longitude": r.get('lon', 0.0), "votes_party_ACCORD": v.get("ACCORD", 0), "votes_party_APC": v.get("APC", 0), "votes_party_PDP": v.get("PDP", 0), "votes_party_ADC": v.get("ADC", 0), "incident_type": None }})
+                    data.append({
+                        "pu_name": r.get('location'), "state": r.get('state'), "lga": r.get('lg'), "ward": r.get('ward'),
+                        "latitude": r.get('lat', 0.0), "longitude": r.get('lon', 0.0),
+                        "votes_party_ACCORD": v.get("ACCORD", 0), "votes_party_APC": v.get("APC", 0),
+                        "votes_party_PDP": v.get("PDP", 0), "votes_party_ADC": v.get("ADC", 0), "incident_type": None
+                    })
                 return data
-    except Exception as e: return []
+    except Exception as e:
+        print(f"DASHBOARD DATA ERROR: {e}")
+        return []
 
 DASHBOARD_HTML = f"""
 <!DOCTYPE html>
@@ -385,14 +350,17 @@ DASHBOARD_HTML = f"""
         .main-container {{ display: flex; flex: 1; gap: 10px; padding: 10px; overflow: hidden; height: calc(100vh - 75px); }}
         .col-side {{ width: 320px; display: flex; flex-direction: column; gap: 10px; height: 100%; }}
         .col-center {{ flex: 1; display: flex; flex-direction: column; gap: 10px; }}
-        .widget {{ background: var(--panel); border: 1px solid var(--border); padding: 12px; display: flex; flex-direction: column; border-radius: 4px; position: relative; }}
+        .widget {{ background: var(--panel); border: 1px solid var(--border); padding: 12px; border-radius: 4px; display: flex; flex-direction: column; position: relative; }}
         .widget-title {{ color: var(--gold); font-size: 10px; font-weight: bold; border-bottom: 1px solid var(--border); margin-bottom: 8px; padding-bottom: 4px; text-transform: uppercase; display: flex; justify-content: space-between; }}
-        .map-wrapper {{ flex: 1; position: relative; background: #000; border-radius: 4px; overflow: hidden; }}
+        .map-wrapper {{ flex: 1; position: relative; background: #000; overflow: hidden; }}
         #map {{ position: absolute; top: 0; bottom: 0; left: 0; right: 0; height: 100% !important; }}
         .pu-list {{ flex: 1; overflow-y: auto; }}
         .pu-card {{ border-bottom: 1px solid var(--border); padding: 12px 10px; cursor: pointer; transition: background 0.2s; }}
         .pu-grid {{ display: grid; grid-template-columns: repeat(4, 1fr); gap: 6px; background: rgba(0,0,0,0.5); padding: 8px; border-radius: 4px; pointer-events: none; }}
-        .big-val {{ font-size: 28px; font-weight: 900; color: white; line-height: 1; margin: 4px 0; }}
+        .grid-val {{ text-align: center; }}
+        .grid-val small {{ font-size: 8px; color: #888; display: block; }}
+        .grid-val span {{ font-size: 11px; font-weight: bold; }}
+        .big-val {{ font-size: 28px; font-weight: 900; color: white; margin: 4px 0; }}
         .box-acc-total {{ border: 1px solid var(--gold); }}
         .box-apc-total {{ border: 1px solid var(--apc); }}
         .box-pdp-total {{ border: 1px solid var(--pdp); }}
@@ -402,8 +370,8 @@ DASHBOARD_HTML = f"""
 <body>
 <nav class="navbar-custom">
     <div class="brand-section" style="min-width: 180px;">
-        <div style="font-size: 13px; font-weight: bold; color: white;">ACCORD SITUATION ROOM</div>
-        <div style="font-size: 10px; color: var(--gold); font-weight: bold;">OFFICIAL FIELD VIEW</div>
+        <div style="font-size: 13px; font-weight: bold; color: white;">IMOLE YOUTH ACCORD MOBILIZATION</div>
+        <div style="font-size: 10px; color: var(--gold); font-weight: bold;">ACCORD CONSOLIDATED VIEW</div>
     </div>
     <div class="nav-kpi-group">
         <div class="party-box box-accord"><img src="/logos/ACCORD.png"><div class="party-info"><label>ACCORD</label><span id="nav-ACCORD">0</span></div></div>
@@ -417,7 +385,7 @@ DASHBOARD_HTML = f"""
 </nav>
 <div class="main-container">
     <div class="col-side">
-        <div class="widget"><input type="text" id="puSearch" placeholder="🔍 Search PU..." onkeyup="refreshData()" style="background:#222; border:none; color:white; padding:10px; width:100%;"></div>
+        <div class="widget"><input type="text" id="puSearch" onkeyup="refreshData()" placeholder="🔍 Search PU..." style="background:#222; border:none; color:white; padding:10px; width:100%;"></div>
         <div class="widget pu-list"><div class="widget-title">Live Results</div><div id="puContainer"></div></div>
     </div>
     <div class="col-center">
@@ -426,17 +394,17 @@ DASHBOARD_HTML = f"""
     </div>
     <div class="col-side">
         <div class="widget" style="height: 210px;"><canvas id="pieChart"></canvas></div>
-        <div class="widget box-acc-total text-center"><label style="color:var(--gold); font-size:9px;">ACCORD</label><div id="totalAccordBig" class="big-val">0</div></div>
-        <div class="widget box-apc-total text-center"><label style="color:var(--apc); font-size:9px;">APC</label><div id="totalAPCBig" class="big-val">0</div></div>
-        <div class="widget box-pdp-total text-center"><label style="color:var(--pdp); font-size:9px;">PDP</label><div id="totalPDPBig" class="big-val">0</div></div>
-        <div class="widget box-adc-total text-center"><label style="color:var(--adc); font-size:9px;">ADC</label><div id="totalADCBig" class="big-val">0</div></div>
+        <div class="widget box-acc-total text-center"><label style="font-size:9px;">ACCORD</label><div id="totalAccordBig" class="big-val">0</div></div>
+        <div class="widget box-apc-total text-center"><label style="font-size:9px;">APC</label><div id="totalAPCBig" class="big-val">0</div></div>
+        <div class="widget box-pdp-total text-center"><label style="font-size:9px;">PDP</label><div id="totalPDPBig" class="big-val">0</div></div>
+        <div class="widget box-adc-total text-center"><label style="font-size:9px;">ADC</label><div id="totalADCBig" class="big-val">0</div></div>
     </div>
 </div>
 <script>
     Chart.register(ChartDataLabels);
     let map = L.map('map', {{zoomControl: false}}).setView([9.082, 8.675], 6);
     L.tileLayer('https://{{s}}.basemaps.cartocdn.com/dark_all/{{z}}/{{x}}/{{y}}{{r}}.png').addTo(map);
-    let charts = {{}};
+    let charts = {{}}, globalData = [];
     async function initDashboard() {{
         const states = await (await fetch("/locations/states")).json();
         const s = document.getElementById("stateFilter");
@@ -445,26 +413,36 @@ DASHBOARD_HTML = f"""
     }}
     async function refreshData() {{
         const res = await fetch("/submissions");
-        const data = await res.json();
-        updateKpis(data); updateChart(data); updateList(data);
+        globalData = await res.json();
+        const state = document.getElementById("stateFilter").value;
+        const search = document.getElementById("puSearch").value.toLowerCase();
+        let filtered = globalData.filter(d => (!state || d.state === state) && (!search || d.pu_name.toLowerCase().includes(search)));
+        updateKpis(filtered); updateChart(filtered); updateList(filtered);
     }}
     function updateKpis(data) {{
         let t = {{ ACCORD: 0, APC: 0, PDP: 0, ADC: 0 }};
         data.forEach(d => {{ t.ACCORD += d.votes_party_ACCORD; t.APC += d.votes_party_APC; t.PDP += d.votes_party_PDP; t.ADC += d.votes_party_ADC; }});
         document.getElementById('nav-ACCORD').innerText = t.ACCORD.toLocaleString();
         document.getElementById('totalAccordBig').innerText = t.ACCORD.toLocaleString();
-        // repeat for others...
+        document.getElementById('nav-APC').innerText = t.APC.toLocaleString();
+        document.getElementById('totalAPCBig').innerText = t.APC.toLocaleString();
+        document.getElementById('nav-PDP').innerText = t.PDP.toLocaleString();
+        document.getElementById('totalPDPBig').innerText = t.PDP.toLocaleString();
+        document.getElementById('nav-ADC').innerText = t.ADC.toLocaleString();
+        document.getElementById('totalADCBig').innerText = t.ADC.toLocaleString();
     }}
     function updateChart(data) {{
+        let t = {{ ACCORD: 0, APC: 0, PDP: 0, ADC: 0 }};
+        data.forEach(d => {{ t.ACCORD += d.votes_party_ACCORD; t.APC += d.votes_party_APC; t.PDP += d.votes_party_PDP; t.ADC += d.votes_party_ADC; }});
         const ctx = document.getElementById('pieChart').getContext('2d');
         if(charts.pie) charts.pie.destroy();
-        charts.pie = new Chart(ctx, {{ type: 'doughnut', data: {{ labels: ['ACC','APC','PDP','ADC'], datasets: [{{ data: [10,20,30,40], backgroundColor: ['#ffc107','#0b3d91','#d9534f','#006400'] }}] }}, options: {{ responsive: true, maintainAspectRatio: false }} }});
+        charts.pie = new Chart(ctx, {{ type: 'doughnut', data: {{ labels: ['ACCORD', 'APC', 'PDP', 'ADC'], datasets: [{{ data: [t.ACCORD, t.APC, t.PDP, t.ADC], backgroundColor: ['#ffc107', '#0b3d91', '#d9534f', '#006400'] }}] }}, options: {{ responsive: true, maintainAspectRatio: false }} }});
     }}
     function updateList(data) {{
         const c = document.getElementById('puContainer'); c.innerHTML = '';
         data.slice(0, 50).forEach(d => {{
             let div = document.createElement('div'); div.className = 'pu-card';
-            div.innerHTML = `<b>${{d.pu_name}}</b><div class="pu-grid"><span>${{d.votes_party_ACCORD}}</span></div>`;
+            div.innerHTML = `<b>${{d.pu_name}}</b><div class="pu-grid"><div class="grid-val"><small>ACC</small><span>${{d.votes_party_ACCORD}}</span></div><div class="grid-val"><small>APC</small><span>${{d.votes_party_APC}}</span></div><div class="grid-val"><small>PDP</small><span>${{d.votes_party_PDP}}</span></div><div class="grid-val"><small>ADC</small><span>${{d.votes_party_ADC}}</span></div></div>`;
             c.appendChild(div);
         }});
     }}
