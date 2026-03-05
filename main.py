@@ -206,6 +206,23 @@ async def index():
         </div>''' for p in parties])
 
     return f"""
+@app.get("/", response_class=HTMLResponse)
+async def index():
+    parties = ["ACCORD", "AA", "AAC", "ADC", "ADP", "APC", "APGA", "APM", "APP", "BP", "LP", "NNPP", "NRM", "PDP", "PRP", "SDP", "YPP", "ZLP"]
+    
+    # Create the HTML for party cards
+    cards_html = "".join([f'''
+        <div class="col-4 col-md-2 mb-2">
+            <div class="p-2 border rounded text-center bg-white shadow-sm">
+                <img src="/logos/{p}.png" onerror="this.src='https://via.placeholder.com/30?text={p}'" style="height:30px">
+                <small class="d-block fw-bold">{p}</small>
+                <input type="number" class="form-control form-control-sm party-v text-center" data-p="{p}" value="0" oninput="calculateTotals()">
+            </div>
+        </div>''' for p in parties])
+
+    # Note: No 'f' before the triple quotes below. 
+    # This prevents Python from getting confused by CSS/JS brackets.
+    template = """
 <!DOCTYPE html>
 <html>
 <head>
@@ -218,12 +235,12 @@ async def index():
     <title>IMOLE YOUTH ACCORD MOBILIZATION</title>
     <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/css/bootstrap.min.css" rel="stylesheet">
     <style>
-        body {{ background: linear-gradient(rgba(0,0,0,0.6), rgba(0,0,0,0.6)), url('/static/bg.png'); background-size: cover; background-position: center; background-attachment: fixed; min-height: 100vh; margin: 0; }}
-        .navbar {{ background: rgba(0, 135, 81, 0.9) !important; backdrop-filter: blur(10px); color: white; border-bottom: 4px solid #ffc107; }}
-        .card {{ background: rgba(255, 255, 255, 0.95) !important; border-radius: 12px; border: none; box-shadow: 0 10px 30px rgba(0,0,0,0.3) !important; margin-bottom: 20px; color: #222; }}
-        .section-label {{ font-size: 0.75rem; font-weight: bold; color: #008751; text-transform: uppercase; border-left: 3px solid #ffc107; padding-left: 10px; margin-bottom: 15px; display: block; }}
-        input[readonly] {{ background-color: #e9ecef !important; font-weight: bold; }}
-        #loginArea {{ margin-top: 100px; }}
+        body { background: linear-gradient(rgba(0,0,0,0.6), rgba(0,0,0,0.6)), url('/static/bg.png'); background-size: cover; background-position: center; background-attachment: fixed; min-height: 100vh; margin: 0; }
+        .navbar { background: rgba(0, 135, 81, 0.9) !important; backdrop-filter: blur(10px); color: white; border-bottom: 4px solid #ffc107; }
+        .card { background: rgba(255, 255, 255, 0.95) !important; border-radius: 12px; border: none; box-shadow: 0 10px 30px rgba(0,0,0,0.3) !important; margin-bottom: 20px; color: #222; }
+        .section-label { font-size: 0.75rem; font-weight: bold; color: #008751; text-transform: uppercase; border-left: 3px solid #ffc107; padding-left: 10px; margin-bottom: 15px; display: block; }
+        input[readonly] { background-color: #e9ecef !important; font-weight: bold; }
+        #loginArea { margin-top: 100px; }
     </style>
 </head>
 <body>
@@ -253,7 +270,9 @@ async def index():
 
             <div class="card p-4">
                 <span class="section-label">2. Official 18-Party Scorecard</span>
-                <div class="row g-2">{party_cards}</div>
+                <div class="row g-2">
+                    PLACEHOLDER_CARDS
+                </div>
             </div>
 
             <div class="card p-4">
@@ -274,45 +293,45 @@ async def index():
 
     <script>
         let lat, lon, officerId, puData = [], wardData = [];
-        function start() {{
+        function start() {
             officerId = document.getElementById('oid').value;
             if(!officerId) return;
             document.getElementById('loginArea').classList.add('d-none');
             document.getElementById('formArea').classList.remove('d-none');
-            fetch('/api/states').then(r=>r.json()).then(data=>{{
+            fetch('/api/states').then(r=>r.json()).then(data=>{
                 const s = document.getElementById('s');
                 data.forEach(item => s.add(new Option(item.toUpperCase(), item)));
-            }});
-        }}
-        function loadLGAs() {{
-            fetch('/api/lgas/'+encodeURIComponent(document.getElementById('s').value)).then(r=>r.json()).then(data=>{{
+            });
+        }
+        function loadLGAs() {
+            fetch('/api/lgas/'+encodeURIComponent(document.getElementById('s').value)).then(r=>r.json()).then(data=>{
                 const l = document.getElementById('l'); l.innerHTML = '<option value="">LGA</option>';
                 data.forEach(item => l.add(new Option(item.toUpperCase(), item)));
-            }});
-        }}
-        function loadWards() {{
-            fetch(`/api/wards/${{encodeURIComponent(document.getElementById('s').value)}}/${{encodeURIComponent(document.getElementById('l').value)}}`).then(r=>r.json()).then(data=>{{
+            });
+        }
+        function loadWards() {
+            fetch('/api/wards/' + encodeURIComponent(document.getElementById('s').value) + '/' + encodeURIComponent(document.getElementById('l').value)).then(r=>r.json()).then(data=>{
                 wardData = data;
                 const w = document.getElementById('w'); w.innerHTML = '<option value="">WARD</option>';
                 data.forEach(item => w.add(new Option(item.name.toUpperCase(), item.name)));
-            }});
-        }}
-        function loadPUs() {{
+            });
+        }
+        function loadPUs() {
             const w = document.getElementById('w').value;
             const wardObj = wardData.find(x => x.name === w);
             document.getElementById('wc').value = wardObj ? wardObj.code : '';
-            fetch(`/api/pus/${{encodeURIComponent(document.getElementById('s').value)}}/${{encodeURIComponent(document.getElementById('l').value)}}/${{encodeURIComponent(w)}}`).then(r=>r.json()).then(data=>{{
+            fetch('/api/pus/' + encodeURIComponent(document.getElementById('s').value) + '/' + encodeURIComponent(document.getElementById('l').value) + '/' + encodeURIComponent(w)).then(r=>r.json()).then(data=>{
                 puData = data;
                 const p = document.getElementById('p'); p.innerHTML = '<option value="">SELECT PU</option>';
                 data.forEach((item, idx) => p.add(new Option(item.location.toUpperCase(), idx)));
-            }});
-        }}
-        function fillPU() {{
+            });
+        }
+        function fillPU() {
             const sel = puData[document.getElementById('p').value];
             document.getElementById('pc').value = sel.pu_code;
             document.getElementById('loc').value = sel.location.toUpperCase();
-        }}
-        function calculateTotals() {{
+        }
+        function calculateTotals() {
             let valid = 0;
             document.querySelectorAll('.party-v').forEach(i => valid += parseInt(i.value || 0));
             const rej = parseInt(document.getElementById('rj').value || 0);
@@ -321,48 +340,49 @@ async def index():
             document.getElementById('vv').value = valid;
             document.getElementById('tc').value = cast;
             const msg = document.getElementById('auditStatus');
-            if (acc > 0 && cast > acc) {{
+            if (acc > 0 && cast > acc) {
                 msg.innerHTML = "⚠️ ERROR: Over-voting!";
                 msg.className = "mt-3 p-2 bg-danger text-white rounded text-center small fw-bold d-block";
-            }} else if (cast > 0 && cast === acc) {{
+            } else if (cast > 0 && cast === acc) {
                 msg.innerHTML = "✅ AUDIT BALANCED";
                 msg.className = "mt-3 p-2 bg-success text-white rounded text-center small fw-bold d-block";
-            }} else {{ msg.className = "d-none"; }}
-        }}
-        function getGPS() {{ navigator.geolocation.getCurrentPosition(pos => {{ lat = pos.coords.latitude; lon = pos.coords.longitude; alert("GPS Fixed!"); }}); }}
-        async function reviewSubmission() {{
+            } else { msg.className = "d-none"; }
+        }
+        function getGPS() { navigator.geolocation.getCurrentPosition(pos => { lat = pos.coords.latitude; lon = pos.coords.longitude; alert("GPS Fixed!"); }); }
+        async function reviewSubmission() {
             if(!lat) return alert("Please Fix GPS first");
-            const v = {{}};
+            const v = {};
             document.querySelectorAll('.party-v').forEach(i => v[i.dataset.p] = parseInt(i.value || 0));
-            const payload = {{
+            const payload = {
                 officer_id: officerId, state: document.getElementById('s').value, lg: document.getElementById('l').value,
                 ward: document.getElementById('w').value, ward_code: document.getElementById('wc').value,
                 pu_code: document.getElementById('pc').value, location: document.getElementById('loc').value,
                 reg_voters: parseInt(document.getElementById('rv').value || 0), total_accredited: parseInt(document.getElementById('ta').value || 0),
                 valid_votes: parseInt(document.getElementById('vv').value || 0), rejected_votes: parseInt(document.getElementById('rj').value || 0),
                 total_cast: parseInt(document.getElementById('tc').value || 0), lat, lon, votes: v
-            }};
-            const res = await fetch('/submit', {{ method: 'POST', headers: {{'Content-Type':'application/json'}}, body: JSON.stringify(payload)}});
+            };
+            const res = await fetch('/submit', { method: 'POST', headers: {'Content-Type':'application/json'}, body: JSON.stringify(payload)});
             const out = await res.json();
             alert(out.message);
             if(out.status === 'success') location.reload();
-        }}
+        }
     </script>
-    
     <script>
-      if ('serviceWorker' in navigator) {{
-        window.addEventListener('load', () => {{
-          navigator.serviceWorker.register('/static/sw.js').then(reg => {{
+      if ('serviceWorker' in navigator) {
+        window.addEventListener('load', () => {
+          navigator.serviceWorker.register('/static/sw.js').then(reg => {
             console.log('Accord App Ready.');
-          }}).catch(err => {{
+          }).catch(err => {
             console.log('PWA registration failed: ', err);
-          }});
-        }});
-      }}
+          });
+        });
+      }
     </script>
 </body>
 </html>
 """
+    # Finally, swap the placeholder for the actual party cards
+    return template.replace("PLACEHOLDER_CARDS", cards_html)
 """
 @app.get("/", response_class=HTMLResponse)
 async def index():
