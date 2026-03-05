@@ -196,6 +196,11 @@ async def index():
 <!DOCTYPE html>
 <html>
 <head>
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-status-bar-style" content="black">
+<meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+<link rel="manifest" href="/static/manifest.json">
+<link rel="apple-touch-icon" href="/logos/ACCORD.png">
     <title>IMOLE YOUTH ACCORD MOBILIZATION</title>
     <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/css/bootstrap.min.css" rel="stylesheet">
     <style>
@@ -329,6 +334,17 @@ async def index():
             if(out.status === 'success') location.reload();
         }}
     </script>
+    <script>
+  if ('serviceWorker' in navigator) {
+    window.addEventListener('load', () => {
+      navigator.serviceWorker.register('/static/sw.js').then(reg => {
+        console.log('Accord App Ready.');
+      }).catch(err => {
+        console.log('PWA registration failed: ', err);
+      });
+    });
+  }
+</script>
 </body>
 </html>
 """
