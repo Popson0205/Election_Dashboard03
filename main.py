@@ -567,12 +567,22 @@ DASHBOARD_HTML = """
 </nav>
 
 <div class="main-content">
-    <div class="side-panel">
-        <div class="panel-header">LIVE PU FEED <span id="pu-count" class="badge bg-warning text-dark ms-2">0</span></div>
-        <div class="p-2"><input type="text" id="puSearch" class="form-control form-control-sm bg-dark text-white border-secondary" placeholder="Search PU..." oninput="renderFeed()"></div>
-        <div class="feed-container" id="feedList"></div>
-    </div>
+data.forEach(d => {
+    t.ACCORD += d.votes_party_ACCORD; t.APC += d.votes_party_APC;
+    t.PDP += d.votes_party_PDP; t.ADC += d.votes_party_ADC;
 
+    const card = document.createElement('div');
+    card.className = 'pu-card';
+    card.innerHTML = `
+        <h6>${d.pu_name}</h6>
+        <div class="score-grid">
+            <div>Accord: <b>${d.votes_party_ACCORD}</b></div>
+            <div>APC: <b>${d.votes_party_APC}</b></div>
+            <div>PDP: <b>${d.votes_party_PDP}</b></div>
+            <div>ADC: <b>${d.votes_party_ADC}</b></div>
+        </div>`;
+    card.onclick = () => { if(d.latitude) map.setView([d.latitude, d.longitude], 14); };
+    list.appendChild(card);
     <div class="d-flex flex-column" style="min-height: 0;">
         <div id="map"></div>
         <div class="chart-row">
