@@ -193,14 +193,28 @@ async def index():
         </div>''' for p in parties])
 
     return f"""
+@app.get("/", response_class=HTMLResponse)
+async def index():
+    parties = ["ACCORD", "AA", "AAC", "ADC", "ADP", "APC", "APGA", "APM", "APP", "BP", "LP", "NNPP", "NRM", "PDP", "PRP", "SDP", "YPP", "ZLP"]
+    party_cards = "".join([f'''
+        <div class="col-4 col-md-2 mb-2">
+            <div class="p-2 border rounded text-center bg-white shadow-sm">
+                <img src="/logos/{p}.png" onerror="this.src='https://via.placeholder.com/30?text={p}'" style="height:30px">
+                <small class="d-block fw-bold">{p}</small>
+                <input type="number" class="form-control form-control-sm party-v text-center" data-p="{p}" value="0" oninput="calculateTotals()">
+            </div>
+        </div>''' for p in parties])
+
+    return f"""
 <!DOCTYPE html>
 <html>
 <head>
-<meta name="apple-mobile-web-app-capable" content="yes">
-<meta name="apple-mobile-web-app-status-bar-style" content="black">
-<meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
-<link rel="manifest" href="/static/manifest.json">
-<link rel="apple-touch-icon" href="/logos/ACCORD.png">
+    <meta name="apple-mobile-web-app-capable" content="yes">
+    <meta name="apple-mobile-web-app-status-bar-style" content="black">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+    <link rel="manifest" href="/static/manifest.json">
+    <link rel="apple-touch-icon" href="/logos/ACCORD.png">
+    
     <title>IMOLE YOUTH ACCORD MOBILIZATION</title>
     <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/css/bootstrap.min.css" rel="stylesheet">
     <style>
@@ -334,19 +348,21 @@ async def index():
             if(out.status === 'success') location.reload();
         }}
     </script>
+    
     <script>
-  if ('serviceWorker' in navigator) {
-    window.addEventListener('load', () => {
-      navigator.serviceWorker.register('/static/sw.js').then(reg => {
-        console.log('Accord App Ready.');
-      }).catch(err => {
-        console.log('PWA registration failed: ', err);
-      });
-    });
-  }
-</script>
+      if ('serviceWorker' in navigator) {{
+        window.addEventListener('load', () => {{
+          navigator.serviceWorker.register('/static/sw.js').then(reg => {{
+            console.log('Accord App Ready.');
+          }}).catch(err => {{
+            console.log('PWA registration failed: ', err);
+          }});
+        }});
+      }}
+    </script>
 </body>
 </html>
+"""
 """
 @app.get("/", response_class=HTMLResponse)
 async def index():
