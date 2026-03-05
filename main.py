@@ -567,6 +567,7 @@ DASHBOARD_HTML = """
 </nav>
 
 <div class="main-content">
+    // --- Update only this part inside the updateUI function ---
 data.forEach(d => {
     t.ACCORD += d.votes_party_ACCORD; t.APC += d.votes_party_APC;
     t.PDP += d.votes_party_PDP; t.ADC += d.votes_party_ADC;
@@ -583,6 +584,13 @@ data.forEach(d => {
         </div>`;
     card.onclick = () => { if(d.latitude) map.setView([d.latitude, d.longitude], 14); };
     list.appendChild(card);
+
+    if(d.latitude) {
+        const m = L.circleMarker([d.latitude, d.longitude], { radius: 6, color: '#ffc107', fillOpacity: 0.8 }).addTo(map);
+        markers.push(m);
+    }
+});
+
     <div class="d-flex flex-column" style="min-height: 0;">
         <div id="map"></div>
         <div class="chart-row">
