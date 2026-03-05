@@ -183,19 +183,6 @@ async def get_dashboard_data():
 @app.get("/", response_class=HTMLResponse)
 async def index():
     parties = ["ACCORD", "AA", "AAC", "ADC", "ADP", "APC", "APGA", "APM", "APP", "BP", "LP", "NNPP", "NRM", "PDP", "PRP", "SDP", "YPP", "ZLP"]
-    party_cards = "".join([f'''
-        <div class="col-4 col-md-2 mb-2">
-            <div class="p-2 border rounded text-center bg-white shadow-sm">
-                <img src="/logos/{p}.png" onerror="this.src='https://via.placeholder.com/30?text={p}'" style="height:30px">
-                <small class="d-block fw-bold">{p}</small>
-                <input type="number" class="form-control form-control-sm party-v text-center" data-p="{p}" value="0" oninput="calculateTotals()">
-            </div>
-        </div>''' for p in parties])
-
-    return f"""
-@app.get("/", response_class=HTMLResponse)
-async def index():
-    parties = ["ACCORD", "AA", "AAC", "ADC", "ADP", "APC", "APGA", "APM", "APP", "BP", "LP", "NNPP", "NRM", "PDP", "PRP", "SDP", "YPP", "ZLP"]
     
     # 1. Generate the party cards separately using a list comprehension
     cards_html = "".join([f'''
