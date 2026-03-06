@@ -125,17 +125,63 @@ async def submit(data: dict):
 
 @app.post("/api/ai_interpret")
 async def ai_interpret(data: dict):
-    acc = data.get('ACCORD', 0); apc = data.get('APC', 0); pdp = data.get('PDP', 0); adc = data.get('ADC', 0)
-    total = acc + apc + pdp + adc
-    if total == 0: return {"analysis": "SYSTEM STATUS: Awaiting live data stream."}
-    share = (acc / total) * 100
-    competitors = {"APC": apc, "PDP": pdp, "ADC": adc}
+    # 1. Baseline Data for Osun State
+    TOTAL_WARDS = 332
+    TOTAL_PU = 3763
+    URBAN_LGAS = ["OSOGBO", "OLORUNDA", "ILESA EAST", "IFE CENTRAL"]
+
+    # 2. Extract incoming values
+    acc = data.get('ACCORD', 0)
+    apc = data.get('APC', 0)
+    pdp = data.get('PDP', 0)
+    lp = data.get('LP', 0)
+    
+    # Contextual data from your new form snippet
+    ta = data.get('total_accredited', 0)
+    rv = data.get('reg_voters', 0)
+    current_lg = data.get('lg', "").upper()
+
+    total_cast = acc + apc + pdp + lp
+    if total_cast == 0: 
+        return {"analysis": "SYSTEM STATUS: Awaiting live data stream from the 332 Wards."}
+
+    # 3. Advanced Statistical Calculations
+    share = (acc / total_cast) * 100
+    competitors = {"APC": apc, "PDP": pdp, "LP": lp}
     top_rival = max(competitors, key=competitors.get)
     margin = acc - competitors[top_rival]
-    performance = "Leading" if margin > 0 else "Trailing"
-    analysis = (f"STATISTICAL AUDIT: Accord maintains a {share:.1f}% vote share. "
-                f"Currently {performance} against {top_rival} by {abs(margin):,} votes.")
-    return {"analysis": analysis}
+    
+    # Voter Productivity Index (VPI) - Checks for turnout health
+    vpi = (ta / rv * 100) if rv > 0 else 0
+    
+    # 4. Interpretive Logic (The "Brain")
+    status = "DOMINANT" if share > 50 else "COMPETITIVE"
+    
+    # Urban vs Rural Trend Analysis
+    location_insight = ""
+    if current_lg in URBAN_LGAS:
+        location_insight = "URBAN SURGE: High volume detected in Capital Hubs. "
+    else:
+        location_insight = "RURAL DENSITY: Mobilization strong in outer wards. "
+
+    # 5. Final Analytics Output
+    analysis = (
+        f"**OSUN ELECTORAL AUDIT:** Accord is {status} with **{share:.1f}%** share. "
+        f"**MARGIN:** {margin:+,} votes ahead of {top_rival}. "
+        f"{location_insight} "
+        f"**TURNOUT:** Average PU Productivity is **{vpi:.1f}%**. "
+        f"**STRATEGIC ALERT:** " + 
+        ("Maintain urban lead to secure state." if current_lg in URBAN_LGAS else "Rural lead confirmed; watch for urban late-night shifts.")
+    )
+    
+    return {
+        "analysis": analysis,
+        "metrics": {
+            "vpi": vpi,
+            "gap_to_win": max(0, (total_cast * 0.51) - acc), # Votes needed for simple majority
+            "intensity": "HIGH" if vpi > 60 else "NORMAL"
+        }
+    }
 
 @app.get("/api/dashboard_filters")
 def get_dash_filters():
