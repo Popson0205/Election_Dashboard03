@@ -800,16 +800,33 @@ DASHBOARD_HTML = """
         updateUI(filtered);
     }
 
-    function updateUI(data) {
-        let t = { ACCORD: 0, APC: 0, PDP: 0, ADC: 0 };
+function updateUI(data) {
+        // 1. Initialize totals including Turnout metrics
+        let t = { 
+            ACCORD: 0, APC: 0, PDP: 0, ADC: 0, LP: 0, 
+            reg_voters: 0, 
+            total_accredited: 0,
+            lg: document.getElementById('fLGA').value || "Osun State"
+        };
+        
         const list = document.getElementById('feedList'); list.innerHTML = "";
         markers.forEach(m => map.removeLayer(m));
         markers = [];
 
         data.forEach(d => {
-            t.ACCORD += d.votes_party_ACCORD; t.APC += d.votes_party_APC;
-            t.PDP += d.votes_party_PDP; t.ADC += d.votes_party_ADC;
+            // 2. Sum Party Votes
+            t.ACCORD += (d.votes_party_ACCORD || 0); 
+            t.APC += (d.votes_party_APC || 0);
+            t.PDP += (d.votes_party_PDP || 0); 
+            t.ADC += (d.votes_party_ADC || 0);
+            t.LP += (d.votes_party_LP || 0); // Added LP for advanced tracking
 
+            // 3. IMPORTANT: Sum Turnout Metrics from the PU data
+            // These fields must be present in your /submissions API response
+            t.reg_voters += (d.reg_voters || 0);
+            t.total_accredited += (d.total_accredited || 0);
+
+            // Render PU Cards (existing logic)
             const card = document.createElement('div');
             card.className = 'pu-card';
             card.innerHTML = `<h6>${d.pu_name}</h6><div class="score-grid">
@@ -825,11 +842,13 @@ DASHBOARD_HTML = """
             }
         });
 
+        // Update Top KPI Navbar
         ['ACCORD', 'APC', 'PDP', 'ADC'].forEach(p => {
             const el = document.getElementById('nav-'+p);
             if(el) el.innerText = t[p].toLocaleString();
         });
         
+        // Margin Calculation
         const rivals = { APC: t.APC, PDP: t.PDP, ADC: t.ADC };
         const topRival = Object.keys(rivals).reduce((a, b) => rivals[a] > rivals[b] ? a : b);
         const margin = t.ACCORD - rivals[topRival];
@@ -845,10 +864,10 @@ DASHBOARD_HTML = """
         const pCountEl = document.getElementById('pu-count');
         if(pCountEl) pCountEl.innerText = data.length;
 
+        // 4. Trigger Charts and AI with the full data object
         updateCharts(t);
-        runAI(t);
+        runAI(t); // Now 't' contains reg_voters and total_accredited!
     }
-
     function updateCharts(t) {
         const labels = ['ACCORD', 'APC', 'PDP', 'ADC'];
         const vals = [t.ACCORD, t.APC, t.PDP, t.ADC];
