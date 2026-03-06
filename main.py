@@ -125,61 +125,72 @@ async def submit(data: dict):
 
 @app.post("/api/ai_interpret")
 async def ai_interpret(data: dict):
-    # 1. Baseline Data for Osun State
-    TOTAL_WARDS = 332
-    TOTAL_PU = 3763
-    URBAN_LGAS = ["OSOGBO", "OLORUNDA", "ILESA EAST", "IFE CENTRAL"]
+    # 1. OSUN STATE ELECTORAL BASELINE (Official Stats)
+    STATS = {
+        "lgas": 30,
+        "wards": 332,
+        "pus": 3763,
+        "urban_hubs": ["OSOGBO", "OLORUNDA", "ILESA EAST", "IFE CENTRAL", "IWO"]
+    }
 
-    # 2. Extract incoming values
+    # 2. Extract Data from Dashboard
     acc = data.get('ACCORD', 0)
     apc = data.get('APC', 0)
     pdp = data.get('PDP', 0)
     lp = data.get('LP', 0)
     
-    # Contextual data from your new form snippet
+    # New metrics from your updated form
     ta = data.get('total_accredited', 0)
     rv = data.get('reg_voters', 0)
-    current_lg = data.get('lg', "").upper()
+    current_lg = str(data.get('lg', "")).upper()
 
-    total_cast = acc + apc + pdp + lp
-    if total_cast == 0: 
-        return {"analysis": "SYSTEM STATUS: Awaiting live data stream from the 332 Wards."}
+    total_votes = acc + apc + pdp + lp
+    if total_votes == 0: 
+        return {"analysis": "SYSTEM READY: Awaiting live feed from 3,763 Polling Units."}
 
-    # 3. Advanced Statistical Calculations
-    share = (acc / total_cast) * 100
-    competitors = {"APC": apc, "PDP": pdp, "LP": lp}
-    top_rival = max(competitors, key=competitors.get)
-    margin = acc - competitors[top_rival]
+    # 3. Statistical Calculations
+    share = (acc / total_votes) * 100
+    margin = acc - max(apc, pdp, lp)
+    turnout = (ta / rv * 100) if rv > 0 else 0
     
-    # Voter Productivity Index (VPI) - Checks for turnout health
-    vpi = (ta / rv * 100) if rv > 0 else 0
+    # 4. Intelligence Logic
+    is_urban = current_lg in STATS["urban_hubs"]
     
-    # 4. Interpretive Logic (The "Brain")
-    status = "DOMINANT" if share > 50 else "COMPETITIVE"
-    
-    # Urban vs Rural Trend Analysis
-    location_insight = ""
-    if current_lg in URBAN_LGAS:
-        location_insight = "URBAN SURGE: High volume detected in Capital Hubs. "
+    # Determine the "Trend"
+    if share > 55:
+        trend = "LANDSLIDE"
+    elif share > 40:
+        trend = "STRONG LEAD"
     else:
-        location_insight = "RURAL DENSITY: Mobilization strong in outer wards. "
+        trend = "BATTLEGROUND"
 
-    # 5. Final Analytics Output
-    analysis = (
-        f"**OSUN ELECTORAL AUDIT:** Accord is {status} with **{share:.1f}%** share. "
-        f"**MARGIN:** {margin:+,} votes ahead of {top_rival}. "
-        f"{location_insight} "
-        f"**TURNOUT:** Average PU Productivity is **{vpi:.1f}%**. "
-        f"**STRATEGIC ALERT:** " + 
-        ("Maintain urban lead to secure state." if current_lg in URBAN_LGAS else "Rural lead confirmed; watch for urban late-night shifts.")
-    )
+    # 5. Generate Advanced Analysis String
+    location_tag = " [URBAN HUB]" if is_urban else " [RURAL SECTOR]"
     
+    analysis = (
+        f"OSUN STATISTICAL AUDIT ({current_lg}{location_tag}): "
+        f"Accord is in a {trend} position with {share:.1f}% of the current tally. "
+        f"Lead Margin: **{margin:+,}** votes. "
+    )
+
+    # Add Turnout Analytics
+    if turnout > 0:
+        analysis += f"Voter Productivity is at **{turnout:.1f}%**. "
+        if turnout > 65:
+            analysis += "⚠️ ALERT: Unusually high turnout detected; verify PU logs. "
+
+    # Add Strategic Guidance
+    if is_urban and share < 45:
+        analysis += "STRATEGY: Increase urban mobilization; Osogbo/Iwo volume is critical."
+    elif not is_urban and share > 50:
+        analysis += "STRATEGY: Rural stronghold confirmed. Protect the lead during collation."
+
     return {
         "analysis": analysis,
-        "metrics": {
-            "vpi": vpi,
-            "gap_to_win": max(0, (total_cast * 0.51) - acc), # Votes needed for simple majority
-            "intensity": "HIGH" if vpi > 60 else "NORMAL"
+        "is_alert": turnout > 70 or margin < 100,
+        "stats": {
+            "turnout_gap": 100 - turnout,
+            "osun_progress": f"Active in {STATS['lgas']} LGAs"
         }
     }
 
@@ -189,37 +200,6 @@ def get_dash_filters():
         with conn.cursor() as cur:
             cur.execute("SELECT DISTINCT state, lg, ward FROM polling_units ORDER BY state, lg, ward")
             return cur.fetchall()
-
-# ADD THIS NEW FUNCTION BELOW IT
-@app.get("/api/dashboard_totals")
-async def get_dashboard_totals():
-    with get_db() as conn:
-        with conn.cursor() as cur:
-            # This pulls the real-time numbers from your field submissions
-            cur.execute("SELECT votes_json, reg_voters, total_accredited, lg FROM field_submissions")
-            rows = cur.fetchall()
-            
-            totals = {
-                "ACCORD": 0, "APC": 0, "PDP": 0, "LP": 0, "ADC": 0,
-                "reg_voters": 0, 
-                "total_accredited": 0,
-                "lg": "OSUN STATE" 
-            }
-
-            for r in rows:
-                # Accumulate the Turnout Metrics
-                totals["reg_voters"] += (r['reg_voters'] or 0)
-                totals["total_accredited"] += (r['total_accredited'] or 0)
-                
-                # Parse the Party Votes
-                try:
-                    v = json.loads(r['votes_json']) if isinstance(r['votes_json'], str) else r['votes_json']
-                    for party in ["ACCORD", "APC", "PDP", "LP", "ADC"]:
-                        totals[party] += v.get(party, 0)
-                except:
-                    continue
-            
-            return totals
 
 @app.get("/export/csv")
 async def export_csv():
@@ -260,56 +240,36 @@ async def get_dashboard_data():
 @app.get("/", response_class=HTMLResponse)
 async def index():
     parties = ["ACCORD", "AA", "AAC", "ADC", "ADP", "APC", "APGA", "APM", "APP", "BP", "LP", "NNPP", "NRM", "PDP", "PRP", "SDP", "YPP", "ZLP"]
-    
-    # 1. Generate the party cards separately using a list comprehension
-    cards_html = "".join([f'''
+    party_cards = "".join([f'''
         <div class="col-4 col-md-2 mb-2">
             <div class="p-2 border rounded text-center bg-white shadow-sm">
                 <img src="/logos/{p}.png" onerror="this.src='https://via.placeholder.com/30?text={p}'" style="height:30px">
-                <small class="d-block fw-bold" style="font-size:0.65rem;">{p}</small>
+                <small class="d-block fw-bold">{p}</small>
                 <input type="number" class="form-control form-control-sm party-v text-center" data-p="{p}" value="0" oninput="calculateTotals()">
             </div>
         </div>''' for p in parties])
 
-    # 2. Define the template as a RAW string (no 'f' at the beginning)
-    # This prevents the SyntaxError: invalid decimal literal
-    html_template = """
+    return f"""
 <!DOCTYPE html>
-<html lang="en">
+<html>
 <head>
-    <meta charset="UTF-8">
-    <meta name="apple-mobile-web-app-capable" content="yes">
-    <meta name="apple-mobile-web-app-status-bar-style" content="black">
-    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
-    <link rel="manifest" href="/static/manifest.json">
-    <link rel="apple-touch-icon" href="/logos/ACCORD.png">
-    
     <title>IMOLE YOUTH ACCORD MOBILIZATION</title>
     <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/css/bootstrap.min.css" rel="stylesheet">
-    
     <style>
-        body { 
-            background: linear-gradient(rgba(0,0,0,0.6), rgba(0,0,0,0.6)), url('/static/bg.png'); 
-            background-size: cover; background-position: center; background-attachment: fixed; 
-            min-height: 100vh; margin: 0; font-family: sans-serif;
-        }
-        .navbar { background: rgba(0, 135, 81, 0.9) !important; backdrop-filter: blur(10px); color: white; border-bottom: 4px solid #ffc107; }
-        .card { background: rgba(255, 255, 255, 0.95) !important; border-radius: 12px; border: none; box-shadow: 0 10px 30px rgba(0,0,0,0.3) !important; margin-bottom: 20px; color: #222; }
-        .section-label { font-size: 0.75rem; font-weight: bold; color: #008751; text-transform: uppercase; border-left: 3px solid #ffc107; padding-left: 10px; margin-bottom: 15px; display: block; }
-        input[readonly] { background-color: #f8f9fa !important; font-weight: bold; }
-        #loginArea { margin-top: 100px; }
+        body {{ background: linear-gradient(rgba(0,0,0,0.6), rgba(0,0,0,0.6)), url('/static/bg.png'); background-size: cover; background-position: center; background-attachment: fixed; min-height: 100vh; margin: 0; }}
+        .navbar {{ background: rgba(0, 135, 81, 0.9) !important; backdrop-filter: blur(10px); color: white; border-bottom: 4px solid #ffc107; }}
+        .card {{ background: rgba(255, 255, 255, 0.95) !important; border-radius: 12px; border: none; box-shadow: 0 10px 30px rgba(0,0,0,0.3) !important; margin-bottom: 20px; color: #222; }}
+        .section-label {{ font-size: 0.75rem; font-weight: bold; color: #008751; text-transform: uppercase; border-left: 3px solid #ffc107; padding-left: 10px; margin-bottom: 15px; display: block; }}
+        input[readonly] {{ background-color: #e9ecef !important; font-weight: bold; }}
+        #loginArea {{ margin-top: 100px; }}
     </style>
 </head>
 <body>
-    <nav class="navbar py-2 mb-4 text-center">
-        <h5 class="m-0" style="font-size: 1rem;">IMOLE YOUTH ACCORD MOBILIZATION</h5>
-    </nav>
-
+    <nav class="navbar py-2 mb-4 text-center"><h5>IMOLE YOUTH ACCORD MOBILIZATION OFFICIAL FIELD COLLATION</h5></nav>
     <div class="container pb-5" style="max-width: 850px;">
         <div id="loginArea" class="card p-5 text-center mx-auto" style="max-width: 400px;">
-            <img src="/logos/ACCORD.png" style="height: 60px; margin-bottom: 15px;" class="mx-auto">
-            <h6>Field Officer Access</h6>
-            <input type="text" id="oid" class="form-control mb-3 text-center" placeholder="Enter ID Number">
+            <h6>Enter Officer ID</h6>
+            <input type="text" id="oid" class="form-control mb-3 text-center">
             <button class="btn btn-success w-100" onclick="start()">Validate Access</button>
         </div>
 
@@ -323,17 +283,15 @@ async def index():
                     <div class="col-12 mt-2"><select id="p" class="form-select" onchange="fillPU()"><option value="">SELECT POLLING UNIT</option></select></div>
                 </div>
                 <div class="row mt-3 g-2">
-                    <div class="col-4"><small class="text-muted">Ward Code</small><input type="text" id="wc" class="form-control" readonly></div>
-                    <div class="col-4"><small class="text-muted">PU Code</small><input type="text" id="pc" class="form-control" readonly></div>
-                    <div class="col-4"><small class="text-muted">Location</small><input type="text" id="loc" class="form-control" readonly></div>
+                    <div class="col-4"><small>Ward Code</small><input type="text" id="wc" class="form-control" readonly></div>
+                    <div class="col-4"><small>PU Code</small><input type="text" id="pc" class="form-control" readonly></div>
+                    <div class="col-4"><small>Location</small><input type="text" id="loc" class="form-control" readonly></div>
                 </div>
             </div>
 
             <div class="card p-4">
                 <span class="section-label">2. Official 18-Party Scorecard</span>
-                <div class="row g-2">
-                    REPLACE_WITH_CARDS
-                </div>
+                <div class="row g-2">{party_cards}</div>
             </div>
 
             <div class="card p-4">
@@ -342,153 +300,108 @@ async def index():
                     <div class="col-4"><label class="small">Registered</label><input type="number" id="rv" class="form-control" value="0"></div>
                     <div class="col-4"><label class="small">Accredited</label><input type="number" id="ta" class="form-control" oninput="calculateTotals()"></div>
                     <div class="col-4"><label class="small">Rejected</label><input type="number" id="rj" class="form-control" value="0" oninput="calculateTotals()"></div>
-                    <div class="col-6"><label class="small text-success">Valid Votes</label><input type="number" id="vv" class="form-control" readonly></div>
+                    <div class="col-6"><label class="small text-success">Valid</label><input type="number" id="vv" class="form-control" readonly></div>
                     <div class="col-6"><label class="small text-primary">Total Cast</label><input type="number" id="tc" class="form-control" readonly></div>
                 </div>
                 <div id="auditStatus" class="mt-3 p-2 rounded text-center d-none small fw-bold"></div>
             </div>
-
-            <button class="btn btn-outline-dark w-100 mb-2" onclick="getGPS()">
-                <i class="bi bi-geo-alt"></i> Fix GPS Location
-            </button>
-            <button class="btn btn-success btn-lg w-100 py-3 fw-bold shadow" onclick="reviewSubmission()">UPLOAD PU RESULT</button>
+            <button class="btn btn-outline-dark w-100 mb-2" onclick="getGPS()">Fix GPS Location</button>
+            <button class="btn btn-success btn-lg w-100 py-3 fw-bold" onclick="reviewSubmission()">UPLOAD PU RESULT</button>
         </div>
     </div>
 
     <script>
         let lat, lon, officerId, puData = [], wardData = [];
-
-        function start() {
+        function start() {{
             officerId = document.getElementById('oid').value;
-            if(!officerId) return alert("Officer ID Required");
+            if(!officerId) return;
             document.getElementById('loginArea').classList.add('d-none');
             document.getElementById('formArea').classList.remove('d-none');
-            fetch('/api/states').then(r=>r.json()).then(data=>{
+            fetch('/api/states').then(r=>r.json()).then(data=>{{
                 const s = document.getElementById('s');
                 data.forEach(item => s.add(new Option(item.toUpperCase(), item)));
-            });
-        }
-
-        function loadLGAs() {
-            const s = document.getElementById('s').value;
-            fetch('/api/lgas/' + encodeURIComponent(s)).then(r=>r.json()).then(data=>{
+            }});
+        }}
+        function loadLGAs() {{
+            fetch('/api/lgas/'+encodeURIComponent(document.getElementById('s').value)).then(r=>r.json()).then(data=>{{
                 const l = document.getElementById('l'); l.innerHTML = '<option value="">LGA</option>';
                 data.forEach(item => l.add(new Option(item.toUpperCase(), item)));
-            });
-        }
-
-        function loadWards() {
-            const s = document.getElementById('s').value;
-            const l = document.getElementById('l').value;
-            fetch(`/api/wards/${encodeURIComponent(s)}/${encodeURIComponent(l)}`).then(r=>r.json()).then(data=>{
+            }});
+        }}
+        function loadWards() {{
+            fetch(`/api/wards/${{encodeURIComponent(document.getElementById('s').value)}}/${{encodeURIComponent(document.getElementById('l').value)}}`).then(r=>r.json()).then(data=>{{
                 wardData = data;
                 const w = document.getElementById('w'); w.innerHTML = '<option value="">WARD</option>';
                 data.forEach(item => w.add(new Option(item.name.toUpperCase(), item.name)));
-            });
-        }
-
-        function loadPUs() {
-            const s = document.getElementById('s').value;
-            const l = document.getElementById('l').value;
+            }});
+        }}
+        function loadPUs() {{
             const w = document.getElementById('w').value;
             const wardObj = wardData.find(x => x.name === w);
             document.getElementById('wc').value = wardObj ? wardObj.code : '';
-            
-            fetch(`/api/pus/${encodeURIComponent(s)}/${encodeURIComponent(l)}/${encodeURIComponent(w)}`).then(r=>r.json()).then(data=>{
+            fetch(`/api/pus/${{encodeURIComponent(document.getElementById('s').value)}}/${{encodeURIComponent(document.getElementById('l').value)}}/${{encodeURIComponent(w)}}`).then(r=>r.json()).then(data=>{{
                 puData = data;
                 const p = document.getElementById('p'); p.innerHTML = '<option value="">SELECT PU</option>';
                 data.forEach((item, idx) => p.add(new Option(item.location.toUpperCase(), idx)));
-            });
-        }
-
-        function fillPU() {
-            const idx = document.getElementById('p').value;
-            if(idx === "") return;
-            const sel = puData[idx];
+            }});
+        }}
+        function fillPU() {{
+            const sel = puData[document.getElementById('p').value];
             document.getElementById('pc').value = sel.pu_code;
             document.getElementById('loc').value = sel.location.toUpperCase();
-        }
-
-        function calculateTotals() {
+        }}
+        function calculateTotals() {{
             let valid = 0;
             document.querySelectorAll('.party-v').forEach(i => valid += parseInt(i.value || 0));
             const rej = parseInt(document.getElementById('rj').value || 0);
             const acc = parseInt(document.getElementById('ta').value || 0);
             const cast = valid + rej;
-            
             document.getElementById('vv').value = valid;
             document.getElementById('tc').value = cast;
-            
             const msg = document.getElementById('auditStatus');
-            if (acc > 0 && cast > acc) {
-                msg.innerText = "⚠️ ERROR: Over-voting detected!";
+            if (acc > 0 && cast > acc) {{
+                msg.innerHTML = "⚠️ ERROR: Over-voting!";
                 msg.className = "mt-3 p-2 bg-danger text-white rounded text-center small fw-bold d-block";
-            } else if (cast > 0 && cast === acc) {
-                msg.innerText = "✅ AUDIT BALANCED";
+            }} else if (cast > 0 && cast === acc) {{
+                msg.innerHTML = "✅ AUDIT BALANCED";
                 msg.className = "mt-3 p-2 bg-success text-white rounded text-center small fw-bold d-block";
-            } else { msg.className = "d-none"; }
-        }
-
-        function getGPS() { 
-            navigator.geolocation.getCurrentPosition(pos => { 
-                lat = pos.coords.latitude; 
-                lon = pos.coords.longitude; 
-                alert("GPS Location Captured!"); 
-            }, err => alert("Please enable GPS on your phone."));
-        }
-
-        async function reviewSubmission() {
-            if(!lat) return alert("Please Fix GPS Location first");
-            const v = {};
+            }} else {{ msg.className = "d-none"; }}
+        }}
+        function getGPS() {{ navigator.geolocation.getCurrentPosition(pos => {{ lat = pos.coords.latitude; lon = pos.coords.longitude; alert("GPS Fixed!"); }}); }}
+        async function reviewSubmission() {{
+            if(!lat) return alert("Please Fix GPS first");
+            const v = {{}};
             document.querySelectorAll('.party-v').forEach(i => v[i.dataset.p] = parseInt(i.value || 0));
-            
-            const payload = {
-                officer_id: officerId, 
-                state: document.getElementById('s').value, 
-                lg: document.getElementById('l').value,
-                ward: document.getElementById('w').value, 
-                ward_code: document.getElementById('wc').value,
-                pu_code: document.getElementById('pc').value, 
-                location: document.getElementById('loc').value,
-                reg_voters: parseInt(document.getElementById('rv').value || 0), 
-                total_accredited: parseInt(document.getElementById('ta').value || 0),
-                valid_votes: parseInt(document.getElementById('vv').value || 0), 
-                rejected_votes: parseInt(document.getElementById('rj').value || 0),
-                total_cast: parseInt(document.getElementById('tc').value || 0), 
-                lat: lat, lon: lon, 
-                votes: v
-            };
-
-            const res = await fetch('/submit', { 
-                method: 'POST', 
-                headers: {'Content-Type':'application/json'}, 
-                body: JSON.stringify(payload)
-            });
+            const payload = {{
+                officer_id: officerId, state: document.getElementById('s').value, lg: document.getElementById('l').value,
+                ward: document.getElementById('w').value, ward_code: document.getElementById('wc').value,
+                pu_code: document.getElementById('pc').value, location: document.getElementById('loc').value,
+                reg_voters: parseInt(document.getElementById('rv').value || 0), total_accredited: parseInt(document.getElementById('ta').value || 0),
+                valid_votes: parseInt(document.getElementById('vv').value || 0), rejected_votes: parseInt(document.getElementById('rj').value || 0),
+                total_cast: parseInt(document.getElementById('tc').value || 0), lat, lon, votes: v
+            }};
+            const res = await fetch('/submit', {{ method: 'POST', headers: {{'Content-Type':'application/json'}}, body: JSON.stringify(payload)}});
             const out = await res.json();
             alert(out.message);
             if(out.status === 'success') location.reload();
-        }
-
-        // PWA Service Worker Registration
-        if ('serviceWorker' in navigator) {
-            window.addEventListener('load', () => {
-                navigator.serviceWorker.register('/static/sw.js').then(() => {
-                    console.log('Accord App Ready.');
-                });
-            });
-        }
+        }}
     </script>
 </body>
 </html>
 """
-    # 3. Final injection and return
-    return html_template.replace("REPLACE_WITH_CARDS", cards_html)
+@app.get("/", response_class=HTMLResponse)
+async def index():
+    parties = ["ACCORD", "AA", "AAC", "ADC", "ADP", "APC", "APGA", "APM", "APP", "BP", "LP", "NNPP", "NRM", "PDP", "PRP", "SDP", "YPP", "ZLP"]
+    party_cards = "".join([f'''
+        <div class="col-4 col-md-2 mb-2">
+            <div class="p-2 border rounded text-center bg-white shadow-sm">
+                <img src="/logos/{p}.png" onerror="this.src='https://via.placeholder.com/30?text={p}'" style="height:30px">
+                <small class="d-block fw-bold">{p}</small>
+                <input type="number" class="form-control form-control-sm party-v text-center" data-p="{p}" value="0" oninput="calculateTotals()">
+            </div>
+        </div>''' for p in parties])
 
-@app.get("/dashboard", response_class=HTMLResponse)
-async def dashboard_page():
-    return DASHBOARD_HTML
-
-DASHBOARD_HTML = """
+    return f"""
 <!DOCTYPE html>
 <html>
 <head>
@@ -640,7 +553,7 @@ DASHBOARD_HTML = """
 <html lang="en">
 <head>
     <meta charset="UTF-8">
-    <title>Imole Youth Accord Mobilization Situation Room - LIVE</title>
+    <title>Accord Situation Room - LIVE</title>
     <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/css/bootstrap.min.css" rel="stylesheet">
     <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" />
     <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/bootstrap-icons@1.11.1/font/bootstrap-icons.css">
@@ -800,33 +713,16 @@ DASHBOARD_HTML = """
         updateUI(filtered);
     }
 
-function updateUI(data) {
-        // 1. Initialize totals including Turnout metrics
-        let t = { 
-            ACCORD: 0, APC: 0, PDP: 0, ADC: 0, LP: 0, 
-            reg_voters: 0, 
-            total_accredited: 0,
-            lg: document.getElementById('fLGA').value || "Osun State"
-        };
-        
+    function updateUI(data) {
+        let t = { ACCORD: 0, APC: 0, PDP: 0, ADC: 0 };
         const list = document.getElementById('feedList'); list.innerHTML = "";
         markers.forEach(m => map.removeLayer(m));
         markers = [];
 
         data.forEach(d => {
-            // 2. Sum Party Votes
-            t.ACCORD += (d.votes_party_ACCORD || 0); 
-            t.APC += (d.votes_party_APC || 0);
-            t.PDP += (d.votes_party_PDP || 0); 
-            t.ADC += (d.votes_party_ADC || 0);
-            t.LP += (d.votes_party_LP || 0); // Added LP for advanced tracking
+            t.ACCORD += d.votes_party_ACCORD; t.APC += d.votes_party_APC;
+            t.PDP += d.votes_party_PDP; t.ADC += d.votes_party_ADC;
 
-            // 3. IMPORTANT: Sum Turnout Metrics from the PU data
-            // These fields must be present in your /submissions API response
-            t.reg_voters += (d.reg_voters || 0);
-            t.total_accredited += (d.total_accredited || 0);
-
-            // Render PU Cards (existing logic)
             const card = document.createElement('div');
             card.className = 'pu-card';
             card.innerHTML = `<h6>${d.pu_name}</h6><div class="score-grid">
@@ -842,13 +738,11 @@ function updateUI(data) {
             }
         });
 
-        // Update Top KPI Navbar
         ['ACCORD', 'APC', 'PDP', 'ADC'].forEach(p => {
             const el = document.getElementById('nav-'+p);
             if(el) el.innerText = t[p].toLocaleString();
         });
         
-        // Margin Calculation
         const rivals = { APC: t.APC, PDP: t.PDP, ADC: t.ADC };
         const topRival = Object.keys(rivals).reduce((a, b) => rivals[a] > rivals[b] ? a : b);
         const margin = t.ACCORD - rivals[topRival];
@@ -864,10 +758,10 @@ function updateUI(data) {
         const pCountEl = document.getElementById('pu-count');
         if(pCountEl) pCountEl.innerText = data.length;
 
-        // 4. Trigger Charts and AI with the full data object
         updateCharts(t);
-        runAI(t); // Now 't' contains reg_voters and total_accredited!
+        runAI(t);
     }
+
     function updateCharts(t) {
         const labels = ['ACCORD', 'APC', 'PDP', 'ADC'];
         const vals = [t.ACCORD, t.APC, t.PDP, t.ADC];
@@ -922,43 +816,19 @@ function updateUI(data) {
         });
     }
 
-async function runAI(totals) {
-    try {
-        // Ensure we are sending the extra metadata for Osun Analytics
-        const payload = {
-            ...totals,
-            // Fallbacks to 0 if the keys don't exist yet
-            reg_voters: totals.reg_voters || 0,
-            total_accredited: totals.total_accredited || 0,
-            lg: totals.lg || "Osun State" 
-        };
-
-        const res = await fetch("/api/ai_interpret", {
-            method: 'POST', 
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify(payload)
-        });
-        
-        const out = await res.json();
-        const aiEl = document.getElementById('ai_box');
-        
-        if(aiEl) {
-            // Use innerHTML instead of innerText if you want the bolding from the AI to work
-            aiEl.innerHTML = out.analysis;
-            
-            // OPTIONAL: Change box color if there's a "High Intensity" alert
-            if(out.is_alert) {
-                aiEl.style.borderLeft = "5px solid #ffc107"; // Yellow for alert
-                aiEl.style.backgroundColor = "#fff9e6";
-            } else {
-                aiEl.style.borderLeft = "5px solid #008751"; // Green for steady
-                aiEl.style.backgroundColor = "#f0fff4";
-            }
-        }
-    } catch(e) {
-        console.error("AI Insight Error:", e);
+    async function runAI(totals) {
+        try {
+            const res = await fetch("/api/ai_interpret", {
+                method: 'POST', headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify(totals)
+            });
+            const out = await res.json();
+            const aiEl = document.getElementById('ai_box');
+            if(aiEl) aiEl.innerText = out.analysis;
+        } catch(e) {}
     }
-}
+
+    document.addEventListener('DOMContentLoaded', init);
 </script>
 </body>
 </html>
