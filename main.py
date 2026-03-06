@@ -190,6 +190,37 @@ def get_dash_filters():
             cur.execute("SELECT DISTINCT state, lg, ward FROM polling_units ORDER BY state, lg, ward")
             return cur.fetchall()
 
+# ADD THIS NEW FUNCTION BELOW IT
+@app.get("/api/dashboard_totals")
+async def get_dashboard_totals():
+    with get_db() as conn:
+        with conn.cursor() as cur:
+            # This pulls the real-time numbers from your field submissions
+            cur.execute("SELECT votes_json, reg_voters, total_accredited, lg FROM field_submissions")
+            rows = cur.fetchall()
+            
+            totals = {
+                "ACCORD": 0, "APC": 0, "PDP": 0, "LP": 0, "ADC": 0,
+                "reg_voters": 0, 
+                "total_accredited": 0,
+                "lg": "OSUN STATE" 
+            }
+
+            for r in rows:
+                # Accumulate the Turnout Metrics
+                totals["reg_voters"] += (r['reg_voters'] or 0)
+                totals["total_accredited"] += (r['total_accredited'] or 0)
+                
+                # Parse the Party Votes
+                try:
+                    v = json.loads(r['votes_json']) if isinstance(r['votes_json'], str) else r['votes_json']
+                    for party in ["ACCORD", "APC", "PDP", "LP", "ADC"]:
+                        totals[party] += v.get(party, 0)
+                except:
+                    continue
+            
+            return totals
+
 @app.get("/export/csv")
 async def export_csv():
     with get_db() as conn:
