@@ -872,19 +872,43 @@ DASHBOARD_HTML = """
         });
     }
 
-    async function runAI(totals) {
-        try {
-            const res = await fetch("/api/ai_interpret", {
-                method: 'POST', headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify(totals)
-            });
-            const out = await res.json();
-            const aiEl = document.getElementById('ai_box');
-            if(aiEl) aiEl.innerText = out.analysis;
-        } catch(e) {}
-    }
+async function runAI(totals) {
+    try {
+        // Ensure we are sending the extra metadata for Osun Analytics
+        const payload = {
+            ...totals,
+            // Fallbacks to 0 if the keys don't exist yet
+            reg_voters: totals.reg_voters || 0,
+            total_accredited: totals.total_accredited || 0,
+            lg: totals.lg || "Osun State" 
+        };
 
-    document.addEventListener('DOMContentLoaded', init);
+        const res = await fetch("/api/ai_interpret", {
+            method: 'POST', 
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify(payload)
+        });
+        
+        const out = await res.json();
+        const aiEl = document.getElementById('ai_box');
+        
+        if(aiEl) {
+            // Use innerHTML instead of innerText if you want the bolding from the AI to work
+            aiEl.innerHTML = out.analysis;
+            
+            // OPTIONAL: Change box color if there's a "High Intensity" alert
+            if(out.is_alert) {
+                aiEl.style.borderLeft = "5px solid #ffc107"; // Yellow for alert
+                aiEl.style.backgroundColor = "#fff9e6";
+            } else {
+                aiEl.style.borderLeft = "5px solid #008751"; // Green for steady
+                aiEl.style.backgroundColor = "#f0fff4";
+            }
+        }
+    } catch(e) {
+        console.error("AI Insight Error:", e);
+    }
+}
 </script>
 </body>
 </html>
