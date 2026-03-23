@@ -526,8 +526,7 @@ DASHBOARD_HTML = """
         
         .box-accord { border-top: 3px solid var(--gold); }
         .box-apc { border-top: 3px solid #0b3d91; }
-        .box-pdp { border-top: 3px solid #d9534f; }
-        .box-adc { border-top: 3px solid #138808; }
+                .box-adc { border-top: 3px solid #138808; }
 
         .main-content { display: grid; grid-template-columns: 320px 1fr 300px; height: calc(100vh - 80px); gap: 10px; padding: 10px; }
         .side-panel { background: var(--panel); border-radius: 12px; display: flex; flex-direction: column; overflow: hidden; border: 1px solid #222; }
@@ -562,7 +561,6 @@ DASHBOARD_HTML = """
     <div class="nav-kpi-group">
         <div class="party-box box-accord"><img src="/logos/ACCORD.png"><div class="party-info"><label>ACCORD</label><span id="nav-ACCORD">0</span></div></div>
         <div class="party-box box-apc"><img src="/logos/APC.png"><div class="party-info"><label>APC</label><span id="nav-APC">0</span></div></div>
-        <div class="party-box box-pdp"><img src="/logos/NNPP.png" onerror="this.src='/logos/NNPP.png'"><div class="party-info"><label>NNPP</label><span id="nav-NNPP">0</span></div></div>
         <div class="party-box box-adc"><img src="/logos/ADC.png"><div class="party-info"><label>ADC</label><span id="nav-ADC">0</span></div></div>
     </div>
 
@@ -693,7 +691,7 @@ DASHBOARD_HTML = """
             }
         });
 
-        ['ACCORD', 'APC', 'NNPP', 'ADC'].forEach(p => {
+        ['ACCORD', 'APC', 'ADC'].forEach(p => {
             const el = document.getElementById('nav-'+p);
             if(el) el.innerText = t[p].toLocaleString();
         });
@@ -719,7 +717,7 @@ DASHBOARD_HTML = """
     }
 
     function updateCharts(t) {
-        const labels = ['ACCORD','AA','AAC','ADC','ADP','APGA','APC','APM','APP','BP','NNPP','PRP','YPP','ZLP'];
+        const labels = ['ACCORD', 'APC', 'ADC'];
         const vals = labels.map(p => t[p] || 0);
         const colors = ['#ffc107','#6c757d','#17a2b8','#138808','#fd7e14','#6f42c1','#0b3d91','#20c997','#e83e8c','#dc3545','#0dcaf0','#198754','#ffc0cb','#ff6b35'];
         const total = vals.reduce((a, b) => a + b, 0);
