@@ -85,7 +85,7 @@ def validate_officer(officer_id: str):
                 cur.execute(
                     """SELECT ward, lg, location, pu_code, ward_code 
                        FROM polling_units 
-                       WHERE state = 'Osun' AND ward_code = %s AND pu_code = %s""",
+                       WHERE state = 'osun' AND ward_code = %s AND pu_code = %s""",
                     (ward_code, pu_code)
                 )
                 row = cur.fetchone()
@@ -110,7 +110,7 @@ def validate_officer(officer_id: str):
 def get_states():
     with get_db() as conn:
         with conn.cursor() as cur:
-            cur.execute("SELECT DISTINCT state FROM polling_units WHERE state = 'Osun' ORDER BY state")
+            cur.execute("SELECT DISTINCT state FROM polling_units WHERE state = 'osun' ORDER BY state")
             rows = cur.fetchall()
             return [r["state"] for r in rows]
 
@@ -118,7 +118,7 @@ def get_states():
 def get_lgas(state: str):
     with get_db() as conn:
         with conn.cursor() as cur:
-            cur.execute("SELECT DISTINCT lg FROM polling_units WHERE state = 'Osun' ORDER BY lg")
+            cur.execute("SELECT DISTINCT lg FROM polling_units WHERE state = 'osun' ORDER BY lg")
             rows = cur.fetchall()
             return [r["lg"] for r in rows]
 
@@ -126,7 +126,7 @@ def get_lgas(state: str):
 def get_wards(state: str, lg: str):
     with get_db() as conn:
         with conn.cursor() as cur:
-            cur.execute("SELECT DISTINCT ward, ward_code FROM polling_units WHERE state = 'Osun' AND lg = %s ORDER BY ward", (lg,))
+            cur.execute("SELECT DISTINCT ward, ward_code FROM polling_units WHERE state = 'osun' AND lg = %s ORDER BY ward", (lg,))
             rows = cur.fetchall()
             return [{"name": r["ward"], "code": r["ward_code"]} for r in rows]
 
@@ -134,7 +134,7 @@ def get_wards(state: str, lg: str):
 def get_pus(state: str, lg: str, ward: str):
     with get_db() as conn:
         with conn.cursor() as cur:
-            cur.execute("SELECT location, pu_code FROM polling_units WHERE state = 'Osun' AND lg = %s AND ward = %s", (lg, ward))
+            cur.execute("SELECT location, pu_code FROM polling_units WHERE state = 'osun' AND lg = %s AND ward = %s", (lg, ward))
             rows = cur.fetchall()
             return [{"location": r["location"], "pu_code": r["pu_code"]} for r in rows]
 
@@ -235,14 +235,14 @@ async def ai_interpret(data: dict):
 def get_dash_filters():
     with get_db() as conn:
         with conn.cursor() as cur:
-            cur.execute("SELECT DISTINCT state, lg, ward FROM polling_units WHERE state = 'Osun' ORDER BY lg, ward")
+            cur.execute("SELECT DISTINCT state, lg, ward FROM polling_units WHERE state = 'osun' ORDER BY lg, ward")
             return cur.fetchall()
 
 @app.get("/export/csv")
 async def export_csv():
     with get_db() as conn:
         with conn.cursor() as cur:
-            cur.execute("SELECT * FROM field_submissions WHERE state = 'Osun' ORDER BY timestamp DESC")
+            cur.execute("SELECT * FROM field_submissions WHERE state = 'osun' ORDER BY timestamp DESC")
             rows = cur.fetchall()
             output = io.StringIO()
             writer = csv.writer(output)
@@ -262,7 +262,7 @@ async def export_csv():
 async def get_dashboard_data():
     with get_db() as conn:
         with conn.cursor() as cur:
-            cur.execute("SELECT * FROM field_submissions WHERE state = 'Osun' ORDER BY timestamp DESC")
+            cur.execute("SELECT * FROM field_submissions WHERE state = 'osun' ORDER BY timestamp DESC")
             rows = cur.fetchall()
             data = []
             for r in rows:
@@ -776,7 +776,7 @@ DASHBOARD_HTML = """
         try {
             const s = document.getElementById('fState').value;
             const l = document.getElementById('fLGA').value;
-            const payload = Object.assign({}, totals, { lg: l || 'ALL', state: s || 'Osun' });
+            const payload = Object.assign({}, totals, { lg: l || 'ALL', state: s || 'osun' });
             const res = await fetch("/api/ai_interpret", {
                 method: 'POST', headers: { 'Content-Type': 'application/json' },
                 body: JSON.stringify(payload)
