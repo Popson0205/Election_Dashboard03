@@ -207,12 +207,12 @@ async def ai_interpret(data: dict):
     analysis = (
         f"OSUN STATISTICAL AUDIT ({current_lg}{location_tag}): "
         f"Accord is in a {trend} position with {share:.1f}% of the current tally. "
-        f"Lead Margin over {top_rival}: **{margin:+,}** votes. "
+        f"Lead Margin over {top_rival}: {margin:+,} votes. "
     )
 
     # Add Turnout Analytics
     if turnout > 0:
-        analysis += f"Voter Productivity is at **{turnout:.1f}%**. "
+        analysis += f"Voter Productivity is at {turnout:.1f}%. "
         if turnout > 65:
             analysis += "⚠️ ALERT: Unusually high turnout detected; verify PU logs. "
 
