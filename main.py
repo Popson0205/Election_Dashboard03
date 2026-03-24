@@ -683,15 +683,31 @@ DASHBOARD_HTML = """
     </div>
 
     <div class="side-panel">
-        <div class="panel-header">VOTE MARGIN ANALYSIS</div>
-        <div class="margin-card">
+        <div class="panel-header" style="display:flex;align-items:center;justify-content:space-between;">
+            <span>VOTE MARGIN ANALYSIS</span>
+            <button class="ov-btn" onclick="openOverlay('ov-margin')" title="Maximize">⛶</button>
+        </div>
+        <div class="margin-card" style="position:relative;">
             <small class="text-secondary">ACCORD LEAD/LAG</small>
             <span id="marginVal" class="margin-val">0</span>
             <small id="marginLead" class="fw-bold">AWAITING DATA</small>
         </div>
 
-        <div class="panel-header">AI ANALYTICS LOG</div>
+        <div class="panel-header" style="display:flex;align-items:center;justify-content:space-between;">
+            <span>AI ANALYTICS LOG</span>
+            <button class="ov-btn" onclick="openOverlay('ov-ai')" title="Maximize">⛶</button>
+        </div>
         <div class="ai-box" id="ai_box">System ready. Waiting for live polling unit synchronization...</div>
+
+        <div class="panel-header" style="display:flex;align-items:center;justify-content:space-between;">
+            <span>📷 EC 8E FORM VIEWER</span>
+            <button class="ov-btn" onclick="openOverlay('ov-ec8e')" title="Maximize">⛶</button>
+        </div>
+        <div id="ec8eViewerPanel" style="background:#111;border-radius:0;padding:10px;margin:0;border:none;border-bottom:1px solid #222;text-align:center;min-height:80px;flex-shrink:0;">
+            <div style="color:#444;font-size:0.72rem;font-style:italic;padding:18px 0;">
+                Click any polling unit to view its EC 8E form
+            </div>
+        </div>
 
         <div class="mt-auto p-3 border-top border-secondary">
             <button class="btn btn-warning btn-sm w-100 fw-bold" onclick="refreshData()">REFRESH ALL DATA</button>
@@ -784,7 +800,10 @@ DASHBOARD_HTML = """
 
             const card = document.createElement('div');
             card.className = 'pu-card';
-            card.innerHTML = `<h6 style="font-size:0.8rem;margin:0 0 4px">${d.pu_name}</h6>
+            const ec8eBadge = d.ec8e_image
+                ? `<span style="float:right;background:#ffc107;color:#000;font-size:0.6rem;font-weight:bold;padding:2px 6px;border-radius:10px;margin-left:6px;">📷 EC8E</span>`
+                : `<span style="float:right;font-size:0.6rem;color:#555;padding:2px 6px;">no image</span>`;
+            card.innerHTML = `<h6 style="font-size:0.8rem;margin:0 0 4px">${d.pu_name}${ec8eBadge}</h6>
                 <div style="font-size:0.72rem;color:#aaa">${d.lga} &rsaquo; ${d.ward}</div>
                 <div class="score-grid">
                     <div>ACCORD: <b style="color:#ffc107">${d.votes_party_ACCORD||0}</b></div>
@@ -792,7 +811,13 @@ DASHBOARD_HTML = """
                     <div>NNPP: ${d.votes_party_NNPP||0}</div>
                     <div>ADC: ${d.votes_party_ADC||0}</div>
                 </div>`;
-            card.onclick = () => { if(d.latitude) map.setView([d.latitude, d.longitude], 14); showEc8e(d.ec8e_image, d.pu_name); };
+            card.onclick = () => {
+                if(d.latitude) map.setView([d.latitude, d.longitude], 14);
+                showEc8e(d.ec8e_image, d.pu_name);
+                // Scroll EC8E panel into view
+                const panel = document.getElementById('ec8eViewerPanel');
+                if(panel) panel.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
+            };
             list.appendChild(card);
 
             if(d.latitude) {
@@ -1026,21 +1051,27 @@ function showEc8e(url, puName) {
     const panel = document.getElementById("ec8eViewerPanel");
     if (!panel) return;
     if (url) {
-        panel.innerHTML = "<div style=\"font-size:0.75rem;color:#aaa;margin-bottom:6px;\">" + puName + "</div><img src=\"" + url + "\" style=\"max-width:100%;border-radius:6px;border:1px solid #ffc107;cursor:pointer;\" onclick=\"openEc8eLightbox(this.src)\">";
+        panel.innerHTML =
+            "<div style='font-size:0.7rem;color:#ffc107;font-weight:bold;margin-bottom:6px;padding:0 4px;'>" + puName + "</div>" +
+            "<div style='position:relative;'>" +
+            "<img src='" + url + "' style='max-width:100%;max-height:160px;border-radius:6px;border:2px solid #ffc107;cursor:zoom-in;display:block;margin:0 auto;object-fit:contain;' onclick='openEc8eLightbox(this.src)' title='Click to enlarge'>" +
+            "<div style='position:absolute;bottom:6px;right:6px;background:rgba(0,0,0,0.7);color:#ffc107;font-size:0.6rem;padding:2px 6px;border-radius:4px;pointer-events:none;'>🔍 CLICK TO ENLARGE</div>" +
+            "</div>" +
+            "<div style='font-size:0.65rem;color:#555;margin-top:5px;text-align:center;'>EC 8E FORM ON FILE</div>";
     } else {
-        panel.innerHTML = "<span style=\"color:#555;font-size:0.75rem;font-style:italic;\">No EC 8E image for this polling unit</span>";
+        panel.innerHTML =
+            "<div style='padding:16px 0;'>" +
+            "<div style='font-size:0.7rem;color:#ffc107;font-weight:bold;margin-bottom:4px;'>" + puName + "</div>" +
+            "<span style='color:#555;font-size:0.72rem;font-style:italic;'>⚠️ No EC 8E image uploaded for this PU</span>" +
+            "</div>";
     }
 }
 
 document.addEventListener("DOMContentLoaded", function() {
-    const rightPanel = document.querySelector(".side-panel:last-of-type");
-    if (rightPanel) {
-        const refreshBtn = rightPanel.querySelector(".mt-auto");
-        const ec8eDiv = document.createElement("div");
-        ec8eDiv.innerHTML = "<div class=\"panel-header\">EC 8E FORM VIEWER <button class=\"ov-btn\" onclick=\"openOverlay('ov-ec8e')\">⛶</button></div><div id=\"ec8eViewerPanel\" style=\"background:#111;border-radius:8px;padding:10px;margin:8px;border:1px solid #333;text-align:center;min-height:60px;\"><span style=\"color:#555;font-size:0.75rem;font-style:italic;\">Click a polling unit to view its EC 8E form</span></div>";
-        rightPanel.insertBefore(ec8eDiv, refreshBtn || null);
-    }
-    [["LIVE PU FEED","ov-feed"],["VOTE MARGIN","ov-margin"],["AI ANALYTICS","ov-ai"]].forEach(function(pair) {
+    // EC8E panel is now static HTML — no injection needed
+
+    // Only inject ov-btn for LIVE PU FEED (others are now static in HTML)
+    [["LIVE PU FEED","ov-feed"]].forEach(function(pair) {
         document.querySelectorAll(".panel-header").forEach(function(h) {
             if (h.textContent.includes(pair[0]) && !h.querySelector(".ov-btn")) {
                 const b = document.createElement("button"); b.className = "ov-btn"; b.innerText = "⛶"; b.onclick = function(){ openOverlay(pair[1]); }; h.appendChild(b);
