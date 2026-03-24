@@ -494,7 +494,7 @@ async def index():
                 pos => {{
                     lat = pos.coords.latitude;
                     lon = pos.coords.longitude;
-                    document.getElementById('gpsLabel').innerText = `✅ GPS Fixed (${lat.toFixed(4)}, ${lon.toFixed(4)})`;
+                    document.getElementById('gpsLabel').innerText = `✅ GPS Fixed (${{lat.toFixed(4)}}, ${{lon.toFixed(4)}})`;
                     document.getElementById('gpsWarning').classList.add('d-none');
                 }},
                 err => {{
