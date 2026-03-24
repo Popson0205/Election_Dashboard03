@@ -733,7 +733,7 @@ DASHBOARD_HTML = """
                     <div>NNPP: ${d.votes_party_NNPP||0}</div>
                     <div>ADC: ${d.votes_party_ADC||0}</div>
                 </div>`;
-            card.onclick = () => { if(d.latitude) map.setView([d.latitude, d.longitude], 14); };
+            card.onclick = () => { if(d.latitude) map.setView([d.latitude, d.longitude], 14); showEc8e(d.ec8e_image, d.pu_name); };
             list.appendChild(card);
 
             if(d.latitude) {
@@ -861,6 +861,11 @@ DASHBOARD_HTML = """
 <div id="ov-margin" class="ov-overlay"><div class="ov-inner"><button class="ov-close" onclick="closeOverlay('ov-margin')">✕</button><h5 style="color:#ffc107">VOTE MARGIN</h5><div style="font-size:2rem;color:#ffc107;text-align:center;padding:30px 0;" id="ov-marginVal">—</div><div style="text-align:center;color:#aaa;" id="ov-marginLead"></div></div></div>
 <div id="ov-ai"     class="ov-overlay"><div class="ov-inner"><button class="ov-close" onclick="closeOverlay('ov-ai')">✕</button><h5 style="color:#ffc107">AI ANALYTICS LOG</h5><pre id="ov-ai-inner" style="color:#ccc;white-space:pre-wrap;font-size:0.82rem;"></pre></div></div>
 <div id="ov-ec8e"   class="ov-overlay"><div class="ov-inner" style="text-align:center;"><button class="ov-close" onclick="closeOverlay('ov-ec8e')">✕</button><h5 style="color:#ffc107">EC 8E FORM VIEWER</h5><div id="ov-ec8e-inner"></div></div></div>
+<div id="ov-kpi" class="ov-overlay"><div class="ov-inner" style="text-align:center;">
+  <button class="ov-close" onclick="closeOverlay('ov-kpi')">✕</button>
+  <h5 style="color:#ffc107;margin-bottom:20px;">PARTY VOTE TOTALS</h5>
+  <div id="ov-kpi-inner" style="display:flex;gap:20px;justify-content:center;flex-wrap:wrap;"></div>
+</div></div>
 
 <script>
 function openOverlay(id) {
@@ -909,6 +914,23 @@ function openOverlay(id) {
         const l = document.getElementById("marginLead");
         if (v) { document.getElementById("ov-marginVal").innerText = v.innerText; document.getElementById("ov-marginVal").style.color = v.style.color; }
         if (l) document.getElementById("ov-marginLead").innerText = l.innerText;
+    }
+    if (id === "ov-kpi") {
+        const container = document.getElementById("ov-kpi-inner");
+        if (!container) return;
+        const parties = [
+            {key:"ACCORD", color:"#ffc107", border:"#ffc107"},
+            {key:"APC",    color:"#0b3d91", border:"#0b3d91"},
+            {key:"ADC",    color:"#138808", border:"#138808"}
+        ];
+        container.innerHTML = parties.map(p => {
+            const el = document.getElementById("nav-"+p.key);
+            const val = el ? el.innerText : "0";
+            return "<div style=\"background:#1e1e1e;border:2px solid "+p.border+";border-radius:10px;padding:20px 30px;min-width:140px;\">"
+                 + "<div style=\"font-size:2.2rem;font-weight:900;color:"+p.color+"\">"+val+"</div>"
+                 + "<div style=\"color:#aaa;font-size:0.9rem;margin-top:6px;\">"+p.key+"</div>"
+                 + "</div>";
+        }).join("");
     }
     if (id === "ov-ai") {
         const src = document.getElementById("ai_box");
@@ -969,12 +991,34 @@ document.addEventListener("DOMContentLoaded", function() {
     if (mapEl) {
         const b = document.createElement("button"); b.className = "ov-btn"; b.style.cssText = "position:absolute;top:8px;right:8px;z-index:1000;"; b.innerText = "⛶"; b.onclick = function(){ openOverlay("ov-map"); }; mapEl.style.position = "relative"; mapEl.appendChild(b);
     }
+    // ⛶ on KPI group
+    const kpiGroup = document.querySelector(".nav-kpi-group");
+    if (kpiGroup && !kpiGroup.querySelector(".ov-btn")) {
+        kpiGroup.style.position = "relative";
+        const kb = document.createElement("button");
+        kb.className = "ov-btn";
+        kb.style.cssText = "position:absolute;top:4px;right:4px;z-index:10;";
+        kb.innerText = "⛶";
+        kb.onclick = function(){ openOverlay("ov-kpi"); };
+        kpiGroup.appendChild(kb);
+    }
+    // ⛶ on margin-card
+    const marginCard = document.querySelector(".margin-card");
+    if (marginCard && !marginCard.querySelector(".ov-btn")) {
+        marginCard.style.position = "relative";
+        const mb = document.createElement("button");
+        mb.className = "ov-btn";
+        mb.style.cssText = "position:absolute;top:6px;right:8px;z-index:10;";
+        mb.innerText = "⛶";
+        mb.onclick = function(){ openOverlay("ov-margin"); };
+        marginCard.appendChild(mb);
+    }
 });
 
 // Esc key closes all overlays
 document.addEventListener("keydown", function(e) {
     if (e.key === "Escape") {
-        ["ov-bar","ov-pie","ov-map","ov-feed","ov-margin","ov-ai","ov-ec8e"].forEach(function(id){ closeOverlay(id); });
+        ["ov-bar","ov-pie","ov-map","ov-feed","ov-margin","ov-ai","ov-ec8e","ov-kpi"].forEach(function(id){ closeOverlay(id); });
         document.getElementById("ec8eLightbox").style.display = "none";
     }
 });
