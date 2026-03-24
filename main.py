@@ -36,6 +36,7 @@ def get_db():
     return psycopg2.connect(DATABASE_URL, cursor_factory=RealDictCursor, sslmode='require')
 
 # --- DATABASE INITIALIZATION ---
+# BUG FIX #3: Added ec8e_image column to CREATE TABLE
 def init_db():
     try:
         conn = get_db()
@@ -44,28 +45,34 @@ def init_db():
             CREATE TABLE IF NOT EXISTS field_submissions (
                 id SERIAL PRIMARY KEY,
                 officer_id TEXT,
-                state TEXT, 
-                lg TEXT, 
-                ward TEXT, 
-                ward_code TEXT, 
-                pu_code TEXT, 
+                state TEXT,
+                lg TEXT,
+                ward TEXT,
+                ward_code TEXT,
+                pu_code TEXT,
                 location TEXT,
-                reg_voters INTEGER, 
-                total_accredited INTEGER, 
-                valid_votes INTEGER, 
-                rejected_votes INTEGER, 
+                reg_voters INTEGER,
+                total_accredited INTEGER,
+                valid_votes INTEGER,
+                rejected_votes INTEGER,
                 total_cast INTEGER,
-                lat REAL, 
-                lon REAL, 
-                timestamp TEXT, 
+                lat REAL,
+                lon REAL,
+                timestamp TEXT,
                 votes_json TEXT,
+                ec8e_image TEXT,
                 UNIQUE(pu_code)
             )
+        """)
+        # Also add column if table already exists without it (safe migration)
+        cur.execute("""
+            ALTER TABLE field_submissions
+            ADD COLUMN IF NOT EXISTS ec8e_image TEXT
         """)
         conn.commit()
         cur.close()
         conn.close()
-        print("✅ Table created successfully")
+        print("✅ Table ready")
     except Exception as e:
         print(f"❌ DB INIT ERROR: {e}")
 
@@ -74,11 +81,6 @@ init_db()
 # --- API ENDPOINTS ---
 @app.get("/api/validate_officer/{officer_id}")
 def validate_officer(officer_id: str):
-    """
-    Officer ID format: {ward_code}-{pu_code}
-    Validates the ID exists in the polling_units table for Osun State.
-    Returns officer details on success, error on failure.
-    """
     try:
         parts = officer_id.split("-", 1)
         if len(parts) != 2:
@@ -87,8 +89,8 @@ def validate_officer(officer_id: str):
         with get_db() as conn:
             with conn.cursor() as cur:
                 cur.execute(
-                    """SELECT ward, lg, location, pu_code, ward_code 
-                       FROM polling_units 
+                    """SELECT ward, lg, location, pu_code, ward_code
+                       FROM polling_units
                        WHERE state = 'osun' AND ward_code = %s AND pu_code = %s""",
                     (ward_code, pu_code)
                 )
@@ -109,7 +111,6 @@ def validate_officer(officer_id: str):
         return {"valid": False, "message": f"Validation error: {str(e)}"}
 
 
-
 @app.get("/api/states")
 def get_states():
     with get_db() as conn:
@@ -122,7 +123,8 @@ def get_states():
 def get_lgas(state: str):
     with get_db() as conn:
         with conn.cursor() as cur:
-            cur.execute("SELECT DISTINCT lg FROM polling_units WHERE state = 'osun' ORDER BY lg")
+            # BUG FIX #6: Use the actual state param (lowercased) instead of hardcoded 'osun'
+            cur.execute("SELECT DISTINCT lg FROM polling_units WHERE LOWER(state) = LOWER(%s) ORDER BY lg", (state,))
             rows = cur.fetchall()
             return [r["lg"] for r in rows]
 
@@ -130,7 +132,7 @@ def get_lgas(state: str):
 def get_wards(state: str, lg: str):
     with get_db() as conn:
         with conn.cursor() as cur:
-            cur.execute("SELECT DISTINCT ward, ward_code FROM polling_units WHERE state = 'osun' AND lg = %s ORDER BY ward", (lg,))
+            cur.execute("SELECT DISTINCT ward, ward_code FROM polling_units WHERE LOWER(state) = LOWER(%s) AND lg = %s ORDER BY ward", (state, lg))
             rows = cur.fetchall()
             return [{"name": r["ward"], "code": r["ward_code"]} for r in rows]
 
@@ -138,7 +140,7 @@ def get_wards(state: str, lg: str):
 def get_pus(state: str, lg: str, ward: str):
     with get_db() as conn:
         with conn.cursor() as cur:
-            cur.execute("SELECT location, pu_code FROM polling_units WHERE state = 'osun' AND lg = %s AND ward = %s", (lg, ward))
+            cur.execute("SELECT location, pu_code FROM polling_units WHERE LOWER(state) = LOWER(%s) AND lg = %s AND ward = %s", (state, lg, ward))
             rows = cur.fetchall()
             return [{"location": r["location"], "pu_code": r["pu_code"]} for r in rows]
 
@@ -177,17 +179,15 @@ async def submit(
         return {"status": "error", "message": "REJECTED: A submission for this Polling Unit already exists."}
     except Exception as e:
         return {"status": "error", "message": str(e)}
+
 @app.post("/api/ai_interpret")
 async def ai_interpret(data: dict):
-    # 1. OSUN STATE ELECTORAL BASELINE (Official Stats)
     STATS = {
         "lgas": 30,
         "wards": 332,
         "pus": 3763,
         "urban_hubs": ["OSOGBO", "OLORUNDA", "ILESA EAST", "IFE CENTRAL", "IWO"]
     }
-
-    # 2. Extract Data from Dashboard — 14 Osun parties
     OSUN_PARTIES_AI = ["ACCORD", "AA", "AAC", "ADC", "ADP", "APGA", "APC", "APM", "APP", "BP", "NNPP", "PRP", "YPP", "ZLP"]
     party_votes = {p: data.get(p, 0) for p in OSUN_PARTIES_AI}
     acc = party_votes["ACCORD"]
@@ -201,16 +201,13 @@ async def ai_interpret(data: dict):
     if total_votes == 0:
         return {"analysis": "SYSTEM READY: Awaiting live feed from 3,763 Polling Units across Osun State."}
 
-    # 3. Statistical Calculations
     share = (acc / total_votes) * 100
     top_rival = max(rivals, key=rivals.get)
     margin = acc - rivals[top_rival]
     turnout = (ta / rv * 100) if rv > 0 else 0
-    
-    # 4. Intelligence Logic
+
     is_urban = current_lg in STATS["urban_hubs"]
-    
-    # Determine the "Trend"
+
     if share > 55:
         trend = "LANDSLIDE"
     elif share > 40:
@@ -218,22 +215,19 @@ async def ai_interpret(data: dict):
     else:
         trend = "BATTLEGROUND"
 
-    # 5. Generate Advanced Analysis String
     location_tag = " [URBAN HUB]" if is_urban else " [RURAL SECTOR]"
-    
+
     analysis = (
         f"OSUN STATISTICAL AUDIT ({current_lg}{location_tag}): "
         f"Accord is in a {trend} position with {share:.1f}% of the current tally. "
         f"Lead Margin over {top_rival}: **{margin:+,}** votes. "
     )
 
-    # Add Turnout Analytics
     if turnout > 0:
         analysis += f"Voter Productivity is at **{turnout:.1f}%**. "
         if turnout > 65:
             analysis += "⚠️ ALERT: Unusually high turnout detected; verify PU logs. "
 
-    # Add Strategic Guidance
     if is_urban and share < 45:
         analysis += "STRATEGY: Increase urban mobilization; Osogbo/Iwo volume is critical."
     elif not is_urban and share > 50:
@@ -294,6 +288,7 @@ async def get_dashboard_data():
                     entry[f"votes_party_{p}"] = v.get(p, 0)
                 data.append(entry)
             return data
+
 @app.get("/", response_class=HTMLResponse)
 async def index():
     parties = ["ACCORD", "AA", "AAC", "ADC", "ADP", "APGA", "APC", "APM", "APP", "BP", "NNPP", "PRP", "YPP", "ZLP"]
@@ -326,7 +321,9 @@ async def index():
     <div class="container pb-5" style="max-width: 850px;">
         <div id="loginArea" class="card p-5 text-center mx-auto" style="max-width: 400px;">
             <h6>Enter Officer ID</h6>
-            <input type="text" id="oid" class="form-control mb-3 text-center">
+            <input type="text" id="oid" class="form-control mb-3 text-center" placeholder="WARDCODE-PUCODE">
+            <!-- BUG FIX #1: Added missing loginError div -->
+            <div id="loginError" class="alert alert-danger d-none small py-2 mb-2"></div>
             <button class="btn btn-success w-100" onclick="start()">Validate Access</button>
         </div>
 
@@ -362,7 +359,15 @@ async def index():
                 </div>
                 <div id="auditStatus" class="mt-3 p-2 rounded text-center d-none small fw-bold"></div>
             </div>
-            <button class="btn btn-outline-dark w-100 mb-2" onclick="getGPS()">Fix GPS Location</button>
+
+            <!-- BUG FIX #5: GPS no longer hard-blocks — shows warning but allows submission -->
+            <button class="btn btn-outline-dark w-100 mb-2" onclick="getGPS()">
+                <span id="gpsLabel">📍 Fix GPS Location (Recommended)</span>
+            </button>
+            <div id="gpsWarning" class="alert alert-warning d-none small py-2 mb-2">
+                ⚠️ GPS not captured. You can still submit, but location will not be recorded.
+            </div>
+
             <div class="card mb-3">
                 <div class="card-body p-3">
                     <span class="section-label">4. EC 8E FORM IMAGE UPLOAD</span>
@@ -404,18 +409,21 @@ async def index():
     <script src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/js/bootstrap.bundle.min.js"></script>
 
     <script>
-        let lat, lon, officerId, puData = [], wardData = [], pendingPayload = null;
+        let lat = null, lon = null, officerId, puData = [], wardData = [], pendingPayload = null;
+
         async function start() {{
             const rawId = document.getElementById('oid').value.trim();
             if(!rawId) return;
             const btn = document.querySelector('#loginArea button');
+            const errEl = document.getElementById('loginError');
             btn.disabled = true; btn.innerText = 'Validating...';
+            errEl.classList.add('d-none');
             try {{
                 const res = await fetch('/api/validate_officer/' + encodeURIComponent(rawId));
                 const out = await res.json();
                 if(!out.valid) {{
-                    document.getElementById('loginError').innerText = out.message;
-                    document.getElementById('loginError').classList.remove('d-none');
+                    errEl.innerText = out.message;
+                    errEl.classList.remove('d-none');
                     btn.disabled = false; btn.innerText = 'Validate Access';
                     return;
                 }}
@@ -427,11 +435,12 @@ async def index():
                     data.forEach(item => s.add(new Option(item.toUpperCase(), item)));
                 }});
             }} catch(e) {{
-                document.getElementById('loginError').innerText = 'Server error. Try again.';
-                document.getElementById('loginError').classList.remove('d-none');
+                errEl.innerText = 'Server error. Try again.';
+                errEl.classList.remove('d-none');
                 btn.disabled = false; btn.innerText = 'Validate Access';
             }}
         }}
+
         function loadLGAs() {{
             fetch('/api/lgas/'+encodeURIComponent(document.getElementById('s').value)).then(r=>r.json()).then(data=>{{
                 const l = document.getElementById('l'); l.innerHTML = '<option value="">LGA</option>';
@@ -457,6 +466,7 @@ async def index():
         }}
         function fillPU() {{
             const sel = puData[document.getElementById('p').value];
+            if(!sel) return;
             document.getElementById('pc').value = sel.pu_code;
             document.getElementById('loc').value = sel.location.toUpperCase();
         }}
@@ -477,21 +487,45 @@ async def index():
                 msg.className = "mt-3 p-2 bg-success text-white rounded text-center small fw-bold d-block";
             }} else {{ msg.className = "d-none"; }}
         }}
-        function getGPS() {{ navigator.geolocation.getCurrentPosition(pos => {{ lat = pos.coords.latitude; lon = pos.coords.longitude; alert("GPS Fixed!"); }}); }}
-        document.getElementById('ec8eFile').addEventListener('change', function() {{
-            const file = this.files[0];
-            if (file) {{
-                const reader = new FileReader();
-                reader.onload = e => {{
-                    document.getElementById('ec8eImg').src = e.target.result;
-                    document.getElementById('ec8ePreview').classList.remove('d-none');
-                }};
-                reader.readAsDataURL(file);
+
+        // BUG FIX #5: GPS is now optional — shows label + warning, does not block submission
+        function getGPS() {{
+            navigator.geolocation.getCurrentPosition(
+                pos => {{
+                    lat = pos.coords.latitude;
+                    lon = pos.coords.longitude;
+                    document.getElementById('gpsLabel').innerText = `✅ GPS Fixed (${lat.toFixed(4)}, ${lon.toFixed(4)})`;
+                    document.getElementById('gpsWarning').classList.add('d-none');
+                }},
+                err => {{
+                    document.getElementById('gpsWarning').classList.remove('d-none');
+                }}
+            );
+        }}
+
+        // BUG FIX #2: ec8eFile listener wrapped in DOMContentLoaded
+        document.addEventListener('DOMContentLoaded', function() {{
+            const ec8eInput = document.getElementById('ec8eFile');
+            if (ec8eInput) {{
+                ec8eInput.addEventListener('change', function() {{
+                    const file = this.files[0];
+                    if (file) {{
+                        const reader = new FileReader();
+                        reader.onload = e => {{
+                            document.getElementById('ec8eImg').src = e.target.result;
+                            document.getElementById('ec8ePreview').classList.remove('d-none');
+                        }};
+                        reader.readAsDataURL(file);
+                    }}
+                }});
             }}
         }});
 
         async function reviewSubmission() {{
-            if(!lat) return alert("Please Fix GPS first");
+            // BUG FIX #5: GPS warning shown but not blocking
+            if(!lat) {{
+                document.getElementById('gpsWarning').classList.remove('d-none');
+            }}
             const v = {{}};
             document.querySelectorAll('.party-v').forEach(i => v[i.dataset.p] = parseInt(i.value || 0));
             pendingPayload = {{
@@ -502,11 +536,11 @@ async def index():
                 valid_votes: parseInt(document.getElementById('vv').value || 0), rejected_votes: parseInt(document.getElementById('rj').value || 0),
                 total_cast: parseInt(document.getElementById('tc').value || 0), lat, lon, votes: v
             }};
-            // Build confirmation modal content
             document.getElementById('confirmPUInfo').innerHTML =
                 `<b>📍 PU:</b> ${{pendingPayload.location}}<br>` +
                 `<b>🗳 Ward:</b> ${{pendingPayload.ward}} &nbsp;|&nbsp; <b>LGA:</b> ${{pendingPayload.lg}}<br>` +
-                `<b>🔑 PU Code:</b> ${{pendingPayload.pu_code}} &nbsp;|&nbsp; <b>Officer:</b> ${{pendingPayload.officer_id}}`;
+                `<b>🔑 PU Code:</b> ${{pendingPayload.pu_code}} &nbsp;|&nbsp; <b>Officer:</b> ${{pendingPayload.officer_id}}` +
+                (lat ? `<br><b>📡 GPS:</b> ${{lat.toFixed(4)}}, ${{lon.toFixed(4)}}` : `<br><span class="text-warning">⚠️ No GPS captured</span>`);
             const tbody = document.getElementById('confirmPartyRows');
             tbody.innerHTML = '';
             Object.entries(v).forEach(([p, score]) => {{
@@ -541,9 +575,8 @@ async def index():
 </body>
 </html>
 """
-# --- DASHBOARD PAGE ---
-# --- DASHBOARD PAGE ---
 
+# --- DASHBOARD PAGE ---
 @app.get("/dashboard", response_class=HTMLResponse)
 async def dashboard_page():
     return DASHBOARD_HTML
@@ -560,32 +593,31 @@ DASHBOARD_HTML = """
     <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
     <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
     <script src="https://cdn.jsdelivr.net/npm/chartjs-plugin-datalabels@2.0.0"></script>
-    
+
     <style>
         :root { --gold: #ffc107; --dark: #0a0a0a; --panel: #141414; }
         body { background-color: var(--dark); color: #fff; font-family: 'Segoe UI', sans-serif; overflow: hidden; height: 100vh; margin: 0; }
-        
+
         .navbar-custom { background: #000; border-bottom: 2px solid var(--gold); padding: 10px 20px; display: flex; align-items: center; justify-content: space-between; }
         .brand-title { color: var(--gold); font-weight: 900; font-size: 1.1rem; letter-spacing: 1px; }
-        
+
         .nav-kpi-group { display: flex; gap: 10px; }
         .party-box { background: #1a1a1a; border: 1px solid #333; border-radius: 8px; padding: 5px 12px; display: flex; align-items: center; gap: 8px; min-width: 120px; }
         .party-box img { height: 30px; width: 30px; object-fit: contain; }
         .party-info label { display: block; font-size: 0.6rem; color: #aaa; margin: 0; }
         .party-info span { font-size: 1rem; font-weight: bold; color: #fff; }
-        
+
         .box-accord { border-top: 3px solid var(--gold); }
         .box-apc { border-top: 3px solid #0b3d91; }
-        .box-pdp { border-top: 3px solid #d9534f; }
         .box-adc { border-top: 3px solid #138808; }
 
         .main-content { display: grid; grid-template-columns: 320px 1fr 300px; height: calc(100vh - 80px); gap: 10px; padding: 10px; }
         .side-panel { background: var(--panel); border-radius: 12px; display: flex; flex-direction: column; overflow: hidden; border: 1px solid #222; }
         .panel-header { background: #1c1c1c; padding: 10px 15px; font-size: 0.75rem; font-weight: bold; color: var(--gold); border-bottom: 1px solid #333; text-transform: uppercase; }
-        
+
         .margin-card { background: #1e1e1e; border-radius: 8px; padding: 15px; text-align: center; margin: 10px; border: 1px solid #333; }
         .margin-val { font-size: 1.8rem; font-weight: 900; display: block; color: var(--gold); line-height: 1.2; }
-        
+
         #map { height: 45%; border-radius: 12px; background: #111; margin-bottom: 10px; }
         .chart-row { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; flex: 1; min-height: 0; }
         .chart-box { background: #1a1a1a; border-radius: 12px; padding: 15px; border: 1px solid #222; position: relative; height: 100%; min-height: 300px; }
@@ -603,6 +635,7 @@ DASHBOARD_HTML = """
     <div class="brand-section">
         <div class="brand-title">ACCORD SITUATION ROOM — OSUN 2026</div>
         <div class="d-flex gap-2 mt-1">
+            <!-- BUG FIX #6: filters use consistent lowercase state value -->
             <select id="fState" class="form-select form-select-sm bg-dark text-white border-secondary" style="width:105px;" onchange="updateLGAs()"><option value="">STATE</option></select>
             <select id="fLGA" class="form-select form-select-sm bg-dark text-white border-secondary" style="width:105px;" onchange="updateWards()"><option value="">LGA</option></select>
             <select id="fWard" class="form-select form-select-sm bg-dark text-white border-secondary" style="width:105px;" onchange="applyFilters()"><option value="">WARD</option></select>
@@ -610,9 +643,21 @@ DASHBOARD_HTML = """
     </div>
 
     <div class="nav-kpi-group">
-        <div class="party-box box-accord"><img src="/logos/ACCORD.png"><div class="party-info"><label>ACCORD</label><span id="nav-ACCORD">0</span></div></div>
-        <div class="party-box box-apc"><img src="/logos/APC.png"><div class="party-info"><label>APC</label><span id="nav-APC">0</span></div></div>
-        <div class="party-box box-adc"><img src="/logos/ADC.png"><div class="party-info"><label>ADC</label><span id="nav-ADC">0</span></div></div>
+        <div class="party-box box-accord"><img src="/logos/ACCORD.png" onerror="this.style.display='none'"><div class="party-info"><label>ACCORD</label><span id="nav-ACCORD">0</span></div></div>
+        <div class="party-box box-apc"><img src="/logos/APC.png" onerror="this.style.display='none'"><div class="party-info"><label>APC</label><span id="nav-APC">0</span></div></div>
+        <div class="party-box box-adc"><img src="/logos/ADC.png" onerror="this.style.display='none'"><div class="party-info"><label>ADC</label><span id="nav-ADC">0</span></div></div>
+        <!-- Hidden spans for all 14 parties so overlay charts can read them -->
+        <span id="nav-AA" style="display:none">0</span>
+        <span id="nav-AAC" style="display:none">0</span>
+        <span id="nav-ADP" style="display:none">0</span>
+        <span id="nav-APGA" style="display:none">0</span>
+        <span id="nav-APM" style="display:none">0</span>
+        <span id="nav-APP" style="display:none">0</span>
+        <span id="nav-BP" style="display:none">0</span>
+        <span id="nav-NNPP" style="display:none">0</span>
+        <span id="nav-PRP" style="display:none">0</span>
+        <span id="nav-YPP" style="display:none">0</span>
+        <span id="nav-ZLP" style="display:none">0</span>
     </div>
 
     <div>
@@ -644,10 +689,10 @@ DASHBOARD_HTML = """
             <span id="marginVal" class="margin-val">0</span>
             <small id="marginLead" class="fw-bold">AWAITING DATA</small>
         </div>
-        
+
         <div class="panel-header">AI ANALYTICS LOG</div>
         <div class="ai-box" id="ai_box">System ready. Waiting for live polling unit synchronization...</div>
-        
+
         <div class="mt-auto p-3 border-top border-secondary">
             <button class="btn btn-warning btn-sm w-100 fw-bold" onclick="refreshData()">REFRESH ALL DATA</button>
         </div>
@@ -657,6 +702,12 @@ DASHBOARD_HTML = """
 <script>
     let map, globalData = [], filterLookup = [], markers = [], pie, bar;
     Chart.register(ChartDataLabels);
+
+    // BUG FIX #4: Store full 14-party totals globally so overlays can access them
+    let globalTotals = {};
+
+    const PARTIES = ['ACCORD','AA','AAC','ADC','ADP','APGA','APC','APM','APP','BP','NNPP','PRP','YPP','ZLP'];
+    const PARTY_COLORS = ['#ffc107','#6c757d','#17a2b8','#138808','#fd7e14','#6f42c1','#0b3d91','#20c997','#e83e8c','#dc3545','#0dcaf0','#198754','#ffc0cb','#ff6b35'];
 
     function init() {
         map = L.map('map', { zoomControl: false }).setView([7.56, 4.52], 9);
@@ -670,6 +721,8 @@ DASHBOARD_HTML = """
         try {
             const res = await fetch('/api/dashboard_filters');
             filterLookup = await res.json();
+            // BUG FIX #6: normalize state to lowercase for consistent comparison
+            filterLookup = filterLookup.map(x => ({ ...x, state: (x.state||'').toLowerCase() }));
             const states = [...new Set(filterLookup.map(x => x.state))];
             const sEl = document.getElementById('fState');
             states.forEach(s => sEl.add(new Option(s.toUpperCase(), s)));
@@ -680,7 +733,8 @@ DASHBOARD_HTML = """
         const s = document.getElementById('fState').value;
         const lEl = document.getElementById('fLGA'); lEl.innerHTML = '<option value="">LGA</option>';
         const lgas = [...new Set(filterLookup.filter(x => x.state === s).map(x => x.lg))];
-        lgas.forEach(l => lEl.add(new Option(l.toUpperCase(), l)));
+        lgas.sort().forEach(l => lEl.add(new Option(l.toUpperCase(), l)));
+        document.getElementById('fWard').innerHTML = '<option value="">WARD</option>';
         applyFilters();
     }
 
@@ -689,7 +743,7 @@ DASHBOARD_HTML = """
         const l = document.getElementById('fLGA').value;
         const wEl = document.getElementById('fWard'); wEl.innerHTML = '<option value="">WARD</option>';
         const wards = [...new Set(filterLookup.filter(x => x.state === s && x.lg === l).map(x => x.ward))];
-        wards.forEach(w => wEl.add(new Option(w.toUpperCase(), w)));
+        wards.sort().forEach(w => wEl.add(new Option(w.toUpperCase(), w)));
         applyFilters();
     }
 
@@ -697,6 +751,8 @@ DASHBOARD_HTML = """
         try {
             const res = await fetch('/submissions');
             globalData = await res.json();
+            // BUG FIX #6: normalize state to lowercase in submission data too
+            globalData = globalData.map(x => ({ ...x, state: (x.state||'').toLowerCase() }));
             applyFilters();
         } catch(e) { console.error("Data refresh error", e); }
     }
@@ -713,15 +769,18 @@ DASHBOARD_HTML = """
     }
 
     function updateUI(data) {
-        const PARTIES = ['ACCORD','AA','AAC','ADC','ADP','APGA','APC','APM','APP','BP','NNPP','PRP','YPP','ZLP'];
         let t = {};
         PARTIES.forEach(p => t[p] = 0);
         const list = document.getElementById('feedList'); list.innerHTML = "";
         markers.forEach(m => map.removeLayer(m));
         markers = [];
 
+        const searchTerm = (document.getElementById('puSearch').value || '').toLowerCase();
+
         data.forEach(d => {
             PARTIES.forEach(p => { t[p] += (d['votes_party_'+p] || 0); });
+
+            if (searchTerm && !d.pu_name.toLowerCase().includes(searchTerm)) return;
 
             const card = document.createElement('div');
             card.className = 'pu-card';
@@ -738,20 +797,25 @@ DASHBOARD_HTML = """
 
             if(d.latitude) {
                 const m = L.circleMarker([d.latitude, d.longitude], { radius: 6, color: '#ffc107', fillOpacity: 0.8 }).addTo(map);
+                m.bindPopup(`<b>${d.pu_name}</b><br>ACCORD: ${d.votes_party_ACCORD||0}`);
                 markers.push(m);
             }
         });
 
-        ['ACCORD', 'APC', 'ADC'].forEach(p => {
+        // BUG FIX #4: Update ALL 14 nav spans (hidden ones too) so overlays get correct data
+        PARTIES.forEach(p => {
             const el = document.getElementById('nav-'+p);
             if(el) el.innerText = t[p].toLocaleString();
         });
-        
+
+        // Store globally for overlay access
+        globalTotals = { ...t };
+
         const rivals = {};
         PARTIES.filter(p => p !== 'ACCORD').forEach(p => rivals[p] = t[p]);
         const topRival = Object.keys(rivals).reduce((a, b) => rivals[a] > rivals[b] ? a : b);
         const margin = t.ACCORD - rivals[topRival];
-        
+
         const mValEl = document.getElementById('marginVal');
         if(mValEl) {
             mValEl.innerText = Math.abs(margin).toLocaleString();
@@ -759,7 +823,7 @@ DASHBOARD_HTML = """
         }
         const mLeadEl = document.getElementById('marginLead');
         if(mLeadEl) mLeadEl.innerText = margin >= 0 ? `LEAD OVER ${topRival}` : `TRAILING ${topRival}`;
-        
+
         const pCountEl = document.getElementById('pu-count');
         if(pCountEl) pCountEl.innerText = data.length;
 
@@ -781,10 +845,7 @@ DASHBOARD_HTML = """
                 maintainAspectRatio: false,
                 layout: { padding: { bottom: 20 } },
                 plugins: {
-                    legend: { 
-                        position: 'bottom', 
-                        labels: { color: '#fff', font: { size: 10 }, padding: 10 } 
-                    },
+                    legend: { position: 'bottom', labels: { color: '#fff', font: { size: 10 }, padding: 10 } },
                     datalabels: {
                         color: '#fff',
                         font: { weight: 'bold', size: 11 },
@@ -806,9 +867,7 @@ DASHBOARD_HTML = """
                 plugins: {
                     legend: { display: false },
                     datalabels: {
-                        color: '#fff',
-                        anchor: 'end',
-                        align: 'top',
+                        color: '#fff', anchor: 'end', align: 'top',
                         font: { weight: 'bold' },
                         formatter: (val) => val > 0 ? val.toLocaleString() : ''
                     }
@@ -839,12 +898,12 @@ DASHBOARD_HTML = """
     document.addEventListener('DOMContentLoaded', init);
 </script>
 
-<!-- ── EC8E Lightbox ── -->
+<!-- EC8E Lightbox -->
 <div id="ec8eLightbox" style="display:none;position:fixed;inset:0;z-index:99999;background:rgba(0,0,0,0.96);align-items:center;justify-content:center;" onclick="this.style.display='none'">
   <img id="ec8eLightboxImg" src="#" style="max-width:95vw;max-height:95vh;border-radius:8px;border:2px solid #ffc107;">
 </div>
 
-<!-- ── Maximize Overlays ── -->
+<!-- Maximize Overlays -->
 <style>
 .ov-overlay{display:none;position:fixed;inset:0;z-index:9999;background:rgba(0,0,0,0.92);align-items:center;justify-content:center;}
 .ov-overlay.active{display:flex;}
@@ -856,15 +915,15 @@ DASHBOARD_HTML = """
 
 <div id="ov-feed"   class="ov-overlay"><div class="ov-inner"><button class="ov-close" onclick="closeOverlay('ov-feed')">✕</button><h5 style="color:#ffc107">LIVE PU FEED</h5><div id="ov-feed-inner"></div></div></div>
 <div id="ov-map"    class="ov-overlay"><div class="ov-inner" style="height:88vh;"><button class="ov-close" onclick="closeOverlay('ov-map')">✕</button><h5 style="color:#ffc107">MAP</h5><div id="ov-map-inner" style="height:80vh;border-radius:8px;overflow:hidden;"></div></div></div>
-<div id="ov-bar"    class="ov-overlay"><div class="ov-inner"><button class="ov-close" onclick="closeOverlay('ov-bar')">✕</button><h5 style="color:#ffc107">BAR CHART</h5><canvas id="ov-barChart" height="300"></canvas></div></div>
-<div id="ov-pie"    class="ov-overlay"><div class="ov-inner"><button class="ov-close" onclick="closeOverlay('ov-pie')">✕</button><h5 style="color:#ffc107">PIE CHART</h5><canvas id="ov-pieChart" height="300"></canvas></div></div>
+<div id="ov-bar"    class="ov-overlay"><div class="ov-inner"><button class="ov-close" onclick="closeOverlay('ov-bar')">✕</button><h5 style="color:#ffc107">BAR CHART — ALL 14 PARTIES</h5><div style="position:relative;height:350px;"><canvas id="ov-barChart"></canvas></div></div></div>
+<div id="ov-pie"    class="ov-overlay"><div class="ov-inner"><button class="ov-close" onclick="closeOverlay('ov-pie')">✕</button><h5 style="color:#ffc107">VOTE SHARE — ALL 14 PARTIES</h5><div style="position:relative;height:400px;"><canvas id="ov-pieChart"></canvas></div></div></div>
 <div id="ov-margin" class="ov-overlay"><div class="ov-inner"><button class="ov-close" onclick="closeOverlay('ov-margin')">✕</button><h5 style="color:#ffc107">VOTE MARGIN</h5><div style="font-size:2rem;color:#ffc107;text-align:center;padding:30px 0;" id="ov-marginVal">—</div><div style="text-align:center;color:#aaa;" id="ov-marginLead"></div></div></div>
 <div id="ov-ai"     class="ov-overlay"><div class="ov-inner"><button class="ov-close" onclick="closeOverlay('ov-ai')">✕</button><h5 style="color:#ffc107">AI ANALYTICS LOG</h5><pre id="ov-ai-inner" style="color:#ccc;white-space:pre-wrap;font-size:0.82rem;"></pre></div></div>
 <div id="ov-ec8e"   class="ov-overlay"><div class="ov-inner" style="text-align:center;"><button class="ov-close" onclick="closeOverlay('ov-ec8e')">✕</button><h5 style="color:#ffc107">EC 8E FORM VIEWER</h5><div id="ov-ec8e-inner"></div></div></div>
 <div id="ov-kpi" class="ov-overlay"><div class="ov-inner" style="text-align:center;">
   <button class="ov-close" onclick="closeOverlay('ov-kpi')">✕</button>
-  <h5 style="color:#ffc107;margin-bottom:20px;">PARTY VOTE TOTALS</h5>
-  <div id="ov-kpi-inner" style="display:flex;gap:20px;justify-content:center;flex-wrap:wrap;"></div>
+  <h5 style="color:#ffc107;margin-bottom:20px;">ALL PARTY VOTE TOTALS</h5>
+  <div id="ov-kpi-inner" style="display:flex;gap:15px;justify-content:center;flex-wrap:wrap;"></div>
 </div></div>
 
 <script>
@@ -887,27 +946,42 @@ function openOverlay(id) {
         }
         setTimeout(() => { if (dst._ovMap) dst._ovMap.invalidateSize(); }, 200);
     }
-    if (id === "ov-bar" || id === "ov-pie") {
-        const PARTIES = ["ACCORD","AA","AAC","ADC","ADP","APGA","APC","APM","APP","BP","NNPP","PRP","YPP","ZLP"];
-        const colors  = ["#ffc107","#6c757d","#17a2b8","#138808","#fd7e14","#6f42c1","#0b3d91","#20c997","#e83e8c","#dc3545","#0dcaf0","#198754","#ffc0cb","#ff6b35"];
-        const vals    = PARTIES.map(p => { const el = document.getElementById("nav-"+p); return el ? parseInt(el.innerText.replace(/,/g,""))||0 : 0; });
-        if (id === "ov-bar") {
-            if (window._ovBar) window._ovBar.destroy();
-            window._ovBar = new Chart(document.getElementById("ov-barChart"), {
-                type: "bar",
-                data: { labels: PARTIES, datasets: [{ data: vals, backgroundColor: colors }] },
-                options: { maintainAspectRatio: false, plugins: { legend: { display: false }, datalabels: { color: "#fff", anchor: "end", align: "top", formatter: v => v > 0 ? v.toLocaleString() : "" } }, scales: { y: { beginAtZero: true, ticks: { color: "#fff" }, grid: { color: "#222" } }, x: { ticks: { color: "#fff", font: { size: 9 } } } } }
-            });
-        }
-        if (id === "ov-pie") {
-            const total = vals.reduce((a,b)=>a+b,0);
-            if (window._ovPie) window._ovPie.destroy();
-            window._ovPie = new Chart(document.getElementById("ov-pieChart"), {
-                type: "doughnut",
-                data: { labels: PARTIES, datasets: [{ data: vals, backgroundColor: colors, borderWidth: 0 }] },
-                options: { maintainAspectRatio: false, plugins: { legend: { position: "bottom", labels: { color: "#fff", font: { size: 10 } } }, datalabels: { color: "#fff", font: { weight: "bold" }, formatter: v => total > 0 && v > 0 ? ((v/total)*100).toFixed(1)+"%" : "" } } }
-            });
-        }
+
+    // BUG FIX #4: Overlay charts now use globalTotals (all 14 parties) instead of reading DOM
+    if (id === "ov-bar") {
+        const vals = PARTIES.map(p => globalTotals[p] || 0);
+        if (window._ovBar) window._ovBar.destroy();
+        window._ovBar = new Chart(document.getElementById("ov-barChart"), {
+            type: "bar",
+            data: { labels: PARTIES, datasets: [{ data: vals, backgroundColor: PARTY_COLORS }] },
+            options: {
+                maintainAspectRatio: false,
+                plugins: {
+                    legend: { display: false },
+                    datalabels: { color: "#fff", anchor: "end", align: "top", formatter: v => v > 0 ? v.toLocaleString() : "" }
+                },
+                scales: {
+                    y: { beginAtZero: true, ticks: { color: "#fff" }, grid: { color: "#222" } },
+                    x: { ticks: { color: "#fff", font: { size: 9 } } }
+                }
+            }
+        });
+    }
+    if (id === "ov-pie") {
+        const vals = PARTIES.map(p => globalTotals[p] || 0);
+        const total = vals.reduce((a,b)=>a+b,0);
+        if (window._ovPie) window._ovPie.destroy();
+        window._ovPie = new Chart(document.getElementById("ov-pieChart"), {
+            type: "doughnut",
+            data: { labels: PARTIES, datasets: [{ data: vals, backgroundColor: PARTY_COLORS, borderWidth: 0 }] },
+            options: {
+                maintainAspectRatio: false,
+                plugins: {
+                    legend: { position: "bottom", labels: { color: "#fff", font: { size: 10 } } },
+                    datalabels: { color: "#fff", font: { weight: "bold" }, formatter: v => total > 0 && v > 0 ? ((v/total)*100).toFixed(1)+"%" : "" }
+                }
+            }
+        });
     }
     if (id === "ov-margin") {
         const v = document.getElementById("marginVal");
@@ -915,20 +989,16 @@ function openOverlay(id) {
         if (v) { document.getElementById("ov-marginVal").innerText = v.innerText; document.getElementById("ov-marginVal").style.color = v.style.color; }
         if (l) document.getElementById("ov-marginLead").innerText = l.innerText;
     }
+    // BUG FIX #4: KPI overlay shows all 14 parties from globalTotals
     if (id === "ov-kpi") {
         const container = document.getElementById("ov-kpi-inner");
         if (!container) return;
-        const parties = [
-            {key:"ACCORD", color:"#ffc107", border:"#ffc107"},
-            {key:"APC",    color:"#0b3d91", border:"#0b3d91"},
-            {key:"ADC",    color:"#138808", border:"#138808"}
-        ];
-        container.innerHTML = parties.map(p => {
-            const el = document.getElementById("nav-"+p.key);
-            const val = el ? el.innerText : "0";
-            return "<div style=\"background:#1e1e1e;border:2px solid "+p.border+";border-radius:10px;padding:20px 30px;min-width:140px;\">"
-                 + "<div style=\"font-size:2.2rem;font-weight:900;color:"+p.color+"\">"+val+"</div>"
-                 + "<div style=\"color:#aaa;font-size:0.9rem;margin-top:6px;\">"+p.key+"</div>"
+        container.innerHTML = PARTIES.map((p, i) => {
+            const val = (globalTotals[p] || 0).toLocaleString();
+            const color = PARTY_COLORS[i];
+            return "<div style=\"background:#1e1e1e;border:2px solid "+color+";border-radius:10px;padding:15px 20px;min-width:110px;\">"
+                 + "<div style=\"font-size:1.6rem;font-weight:900;color:"+color+"\">"+val+"</div>"
+                 + "<div style=\"color:#aaa;font-size:0.8rem;margin-top:4px;\">"+p+"</div>"
                  + "</div>";
         }).join("");
     }
@@ -962,9 +1032,7 @@ function showEc8e(url, puName) {
     }
 }
 
-// Inject ⛶ buttons and EC8E panel after DOM loads
 document.addEventListener("DOMContentLoaded", function() {
-    // EC8E viewer panel in right sidebar
     const rightPanel = document.querySelector(".side-panel:last-of-type");
     if (rightPanel) {
         const refreshBtn = rightPanel.querySelector(".mt-auto");
@@ -972,7 +1040,6 @@ document.addEventListener("DOMContentLoaded", function() {
         ec8eDiv.innerHTML = "<div class=\"panel-header\">EC 8E FORM VIEWER <button class=\"ov-btn\" onclick=\"openOverlay('ov-ec8e')\">⛶</button></div><div id=\"ec8eViewerPanel\" style=\"background:#111;border-radius:8px;padding:10px;margin:8px;border:1px solid #333;text-align:center;min-height:60px;\"><span style=\"color:#555;font-size:0.75rem;font-style:italic;\">Click a polling unit to view its EC 8E form</span></div>";
         rightPanel.insertBefore(ec8eDiv, refreshBtn || null);
     }
-    // ⛶ buttons on panel headers
     [["LIVE PU FEED","ov-feed"],["VOTE MARGIN","ov-margin"],["AI ANALYTICS","ov-ai"]].forEach(function(pair) {
         document.querySelectorAll(".panel-header").forEach(function(h) {
             if (h.textContent.includes(pair[0]) && !h.querySelector(".ov-btn")) {
@@ -980,18 +1047,15 @@ document.addEventListener("DOMContentLoaded", function() {
             }
         });
     });
-    // ⛶ on chart boxes
     document.querySelectorAll(".chart-box").forEach(function(box, i) {
         const ids = ["ov-bar","ov-pie"];
         if (!ids[i]) return;
         const b = document.createElement("button"); b.className = "ov-btn"; b.style.cssText = "position:absolute;top:6px;right:8px;z-index:10;"; b.innerText = "⛶"; b.onclick = function(){ openOverlay(ids[i]); }; box.style.position = "relative"; box.appendChild(b);
     });
-    // ⛶ on map
     const mapEl = document.getElementById("map");
     if (mapEl) {
         const b = document.createElement("button"); b.className = "ov-btn"; b.style.cssText = "position:absolute;top:8px;right:8px;z-index:1000;"; b.innerText = "⛶"; b.onclick = function(){ openOverlay("ov-map"); }; mapEl.style.position = "relative"; mapEl.appendChild(b);
     }
-    // ⛶ on KPI group
     const kpiGroup = document.querySelector(".nav-kpi-group");
     if (kpiGroup && !kpiGroup.querySelector(".ov-btn")) {
         kpiGroup.style.position = "relative";
@@ -1002,7 +1066,6 @@ document.addEventListener("DOMContentLoaded", function() {
         kb.onclick = function(){ openOverlay("ov-kpi"); };
         kpiGroup.appendChild(kb);
     }
-    // ⛶ on margin-card
     const marginCard = document.querySelector(".margin-card");
     if (marginCard && !marginCard.querySelector(".ov-btn")) {
         marginCard.style.position = "relative";
@@ -1015,7 +1078,6 @@ document.addEventListener("DOMContentLoaded", function() {
     }
 });
 
-// Esc key closes all overlays
 document.addEventListener("keydown", function(e) {
     if (e.key === "Escape") {
         ["ov-bar","ov-pie","ov-map","ov-feed","ov-margin","ov-ai","ov-ec8e","ov-kpi"].forEach(function(id){ closeOverlay(id); });
