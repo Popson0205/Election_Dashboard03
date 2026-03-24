@@ -20,6 +20,16 @@ logger = logging.getLogger(__name__)
 
 app = FastAPI()
 
+# ── CORS — allow all origins so dashboard works inside iframes ────────────────
+from fastapi.middleware.cors import CORSMiddleware
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=["*"],
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
+# ─────────────────────────────────────────────────────────────────────────────
+
 # ── Cloudinary Configuration ──────────────────────────────────────────────────
 cloudinary.config(
     cloud_name = os.environ.get("CLOUDINARY_CLOUD_NAME", ""),
@@ -29,12 +39,12 @@ cloudinary.config(
 # ─────────────────────────────────────────────────────────────────────────────
 
 # Render-safe Pathing
-LOGO_PATH = os.path.join(os.getcwd(), "static", "logos")
+LOGO_PATH = "/home/user/work/static/logos"
 os.makedirs(LOGO_PATH, exist_ok=True)
 app.mount("/logos", StaticFiles(directory=LOGO_PATH), name="logos")
 
-STATIC_PATH = os.path.join(os.getcwd(), "static")
-EC8E_PATH = os.path.join(os.getcwd(), "static", "ec8e")
+STATIC_PATH = "/home/user/work/static"
+EC8E_PATH = "/home/user/work/static/ec8e"
 os.makedirs(EC8E_PATH, exist_ok=True)
 os.makedirs(STATIC_PATH, exist_ok=True)
 app.mount("/static", StaticFiles(directory=STATIC_PATH), name="static")
@@ -625,7 +635,11 @@ async def index():
 # --- DASHBOARD PAGE ---
 @app.get("/dashboard", response_class=HTMLResponse)
 async def dashboard_page():
-    return DASHBOARD_HTML
+    from fastapi.responses import HTMLResponse as _HR
+    return _HR(content=DASHBOARD_HTML, headers={
+        "X-Frame-Options": "ALLOWALL",
+        "Content-Security-Policy": "frame-ancestors *"
+    })
 
 DASHBOARD_HTML = """
 <!DOCTYPE html>
@@ -788,7 +802,7 @@ DASHBOARD_HTML = """
 
     async function loadFilters() {
         try {
-            const res = await fetch('/api/dashboard_filters');
+            const res = await fetch(window.location.origin + '/api/dashboard_filters');
             filterLookup = await res.json();
             // BUG FIX #6: normalize state to lowercase for consistent comparison
             filterLookup = filterLookup.map(x => ({ ...x, state: (x.state||'').toLowerCase() }));
@@ -818,7 +832,7 @@ DASHBOARD_HTML = """
 
     async function refreshData() {
         try {
-            const res = await fetch('/submissions');
+            const res = await fetch(window.location.origin + '/submissions');
             globalData = await res.json();
             // BUG FIX #6: normalize state to lowercase in submission data too
             globalData = globalData.map(x => ({ ...x, state: (x.state||'').toLowerCase() }));
@@ -963,7 +977,7 @@ DASHBOARD_HTML = """
             const s = document.getElementById('fState').value;
             const l = document.getElementById('fLGA').value;
             const payload = Object.assign({}, totals, { lg: l || 'ALL', state: s || 'Osun' });
-            const res = await fetch("/api/ai_interpret", {
+            const res = await fetch(window.location.origin + "/api/ai_interpret", {
                 method: 'POST', headers: { 'Content-Type': 'application/json' },
                 body: JSON.stringify(payload)
             });
@@ -974,28 +988,8 @@ DASHBOARD_HTML = """
     }
 
     document.addEventListener('DOMContentLoaded', init);
-</script>
-
-<!-- EC8E Lightbox -->
-<div id="ec8eLightbox" style="display:none;position:fixed;inset:0;z-index:9999999;background:rgba(0,0,0,0.96);align-items:center;justify-content:center;" onclick="this.style.display='none'">
-  <img id="ec8eLightboxImg" src="#" style="max-width:95vw;max-height:95vh;border-radius:8px;border:2px solid #ffc107;">
-</div>
 
 
-<div id="ov-feed"   class="ov-overlay"><div class="ov-inner"><button class="ov-close" onclick="closeOverlay('ov-feed')">✕</button><h5 style="color:#ffc107">LIVE PU FEED</h5><div id="ov-feed-inner"></div></div></div>
-<div id="ov-map"    class="ov-overlay"><div class="ov-inner" style="height:88vh;"><button class="ov-close" onclick="closeOverlay('ov-map')">✕</button><h5 style="color:#ffc107">MAP</h5><div id="ov-map-inner" style="height:80vh;border-radius:8px;overflow:hidden;"></div></div></div>
-<div id="ov-bar"    class="ov-overlay"><div class="ov-inner"><button class="ov-close" onclick="closeOverlay('ov-bar')">✕</button><h5 style="color:#ffc107">BAR CHART — ALL 14 PARTIES</h5><div style="position:relative;height:350px;"><canvas id="ov-barChart"></canvas></div></div></div>
-<div id="ov-pie"    class="ov-overlay"><div class="ov-inner"><button class="ov-close" onclick="closeOverlay('ov-pie')">✕</button><h5 style="color:#ffc107">VOTE SHARE — ALL 14 PARTIES</h5><div style="position:relative;height:400px;"><canvas id="ov-pieChart"></canvas></div></div></div>
-<div id="ov-margin" class="ov-overlay"><div class="ov-inner"><button class="ov-close" onclick="closeOverlay('ov-margin')">✕</button><h5 style="color:#ffc107">VOTE MARGIN</h5><div style="font-size:2rem;color:#ffc107;text-align:center;padding:30px 0;" id="ov-marginVal">—</div><div style="text-align:center;color:#aaa;" id="ov-marginLead"></div></div></div>
-<div id="ov-ai"     class="ov-overlay"><div class="ov-inner"><button class="ov-close" onclick="closeOverlay('ov-ai')">✕</button><h5 style="color:#ffc107">AI ANALYTICS LOG</h5><pre id="ov-ai-inner" style="color:#ccc;white-space:pre-wrap;font-size:0.82rem;"></pre></div></div>
-<div id="ov-ec8e"   class="ov-overlay"><div class="ov-inner" style="text-align:center;"><button class="ov-close" onclick="closeOverlay('ov-ec8e')">✕</button><h5 style="color:#ffc107">EC 8E FORM VIEWER</h5><div id="ov-ec8e-inner"></div></div></div>
-<div id="ov-kpi" class="ov-overlay"><div class="ov-inner" style="text-align:center;">
-  <button class="ov-close" onclick="closeOverlay('ov-kpi')">✕</button>
-  <h5 style="color:#ffc107;margin-bottom:20px;">ALL PARTY VOTE TOTALS</h5>
-  <div id="ov-kpi-inner" style="display:flex;gap:15px;justify-content:center;flex-wrap:wrap;"></div>
-</div></div>
-
-<script>
 function openOverlay(id) {
     const el = document.getElementById(id);
     if (!el) return;
@@ -1065,9 +1059,9 @@ function openOverlay(id) {
         container.innerHTML = PARTIES.map((p, i) => {
             const val = (globalTotals[p] || 0).toLocaleString();
             const color = PARTY_COLORS[i];
-            return "<div style=\"background:#1e1e1e;border:2px solid "+color+";border-radius:10px;padding:15px 20px;min-width:110px;\">"
-                 + "<div style=\"font-size:1.6rem;font-weight:900;color:"+color+"\">"+val+"</div>"
-                 + "<div style=\"color:#aaa;font-size:0.8rem;margin-top:4px;\">"+p+"</div>"
+            return "<div style='background:#1e1e1e;border:2px solid "+color+";border-radius:10px;padding:15px 20px;min-width:110px;'>"
+                 + "<div style='font-size:1.6rem;font-weight:900;color:"+color+"'>"+val+"</div>"
+                 + "<div style='color:#aaa;font-size:0.8rem;margin-top:4px;'>"+p+"</div>"
                  + "</div>";
         }).join("");
     }
@@ -1094,20 +1088,38 @@ function openEc8eLightbox(url) {
 function showEc8e(url, puName) {
     const panel = document.getElementById("ec8eViewerPanel");
     if (!panel) return;
+    panel.innerHTML = "";
+    const nameDiv = document.createElement("div");
+    nameDiv.style.cssText = "font-size:0.7rem;color:#ffc107;font-weight:bold;margin-bottom:6px;padding:0 4px;";
+    nameDiv.textContent = puName;
+    panel.appendChild(nameDiv);
     if (url) {
-        panel.innerHTML =
-            "<div style='font-size:0.7rem;color:#ffc107;font-weight:bold;margin-bottom:6px;padding:0 4px;'>" + puName + "</div>" +
-            "<div style='position:relative;'>" +
-            "<img src=\"" + (url.startsWith('http') ? url : window.location.origin + url) + "\" style=\"max-width:100%;max-height:180px;border-radius:6px;border:2px solid #ffc107;cursor:zoom-in;display:block;margin:0 auto;object-fit:contain;\" onerror=\"this.style.opacity='0.3';\" onclick=\"openEc8eLightbox(this.src)\" title=\"Click to enlarge\">" +
-            "<div style='position:absolute;bottom:6px;right:6px;background:rgba(0,0,0,0.7);color:#ffc107;font-size:0.6rem;padding:2px 6px;border-radius:4px;pointer-events:none;'>🔍 CLICK TO ENLARGE</div>" +
-            "</div>" +
-            "<div style='font-size:0.65rem;color:#555;margin-top:5px;text-align:center;'>EC 8E FORM ON FILE</div>";
+        const absUrl = url.startsWith("http") ? url : window.location.origin + url;
+        const wrap = document.createElement("div");
+        wrap.style.position = "relative";
+        const img = document.createElement("img");
+        img.src = absUrl;
+        img.style.cssText = "max-width:100%;max-height:180px;border-radius:6px;border:2px solid #ffc107;cursor:zoom-in;display:block;margin:0 auto;object-fit:contain;";
+        img.title = "Click to enlarge";
+        img.onclick = function() { openEc8eLightbox(this.src); };
+        img.onerror = function() {
+            wrap.innerHTML = "<div style='padding:16px;color:#666;font-size:0.75rem;text-align:center;'>⚠️ Image unavailable<br><small>Re-submit with image to update</small></div>";
+        };
+        const hint = document.createElement("div");
+        hint.style.cssText = "position:absolute;bottom:6px;right:6px;background:rgba(0,0,0,0.7);color:#ffc107;font-size:0.6rem;padding:2px 6px;border-radius:4px;pointer-events:none;";
+        hint.textContent = "🔍 CLICK TO ENLARGE";
+        wrap.appendChild(img);
+        wrap.appendChild(hint);
+        panel.appendChild(wrap);
+        const footer = document.createElement("div");
+        footer.style.cssText = "font-size:0.65rem;color:#555;margin-top:5px;text-align:center;";
+        footer.textContent = "EC 8E FORM ON FILE";
+        panel.appendChild(footer);
     } else {
-        panel.innerHTML =
-            "<div style='padding:16px 0;'>" +
-            "<div style='font-size:0.7rem;color:#ffc107;font-weight:bold;margin-bottom:4px;'>" + puName + "</div>" +
-            "<span style='color:#555;font-size:0.72rem;font-style:italic;'>⚠️ No EC 8E image uploaded for this PU</span>" +
-            "</div>";
+        const msg = document.createElement("span");
+        msg.style.cssText = "color:#555;font-size:0.72rem;font-style:italic;";
+        msg.textContent = "⚠️ No EC 8E image uploaded for this PU";
+        panel.appendChild(msg);
     }
 }
 
@@ -1159,8 +1171,31 @@ document.addEventListener("keydown", function(e) {
         document.getElementById("ec8eLightbox").style.display = "none";
     }
 });
+
 </script>
 
+<!-- EC8E Lightbox -->
+<div id="ec8eLightbox" style="display:none;position:fixed;inset:0;z-index:9999999;background:rgba(0,0,0,0.96);align-items:center;justify-content:center;" onclick="this.style.display='none'">
+  <img id="ec8eLightboxImg" src="#" style="max-width:95vw;max-height:95vh;border-radius:8px;border:2px solid #ffc107;">
+</div>
+
+
+<div id="ov-feed"   class="ov-overlay"><div class="ov-inner"><button class="ov-close" onclick="closeOverlay('ov-feed')">✕</button><h5 style="color:#ffc107">LIVE PU FEED</h5><div id="ov-feed-inner"></div></div></div>
+<div id="ov-map"    class="ov-overlay"><div class="ov-inner" style="height:88vh;"><button class="ov-close" onclick="closeOverlay('ov-map')">✕</button><h5 style="color:#ffc107">MAP</h5><div id="ov-map-inner" style="height:80vh;border-radius:8px;overflow:hidden;"></div></div></div>
+<div id="ov-bar"    class="ov-overlay"><div class="ov-inner"><button class="ov-close" onclick="closeOverlay('ov-bar')">✕</button><h5 style="color:#ffc107">BAR CHART — ALL 14 PARTIES</h5><div style="position:relative;height:350px;"><canvas id="ov-barChart"></canvas></div></div></div>
+<div id="ov-pie"    class="ov-overlay"><div class="ov-inner"><button class="ov-close" onclick="closeOverlay('ov-pie')">✕</button><h5 style="color:#ffc107">VOTE SHARE — ALL 14 PARTIES</h5><div style="position:relative;height:400px;"><canvas id="ov-pieChart"></canvas></div></div></div>
+<div id="ov-margin" class="ov-overlay"><div class="ov-inner"><button class="ov-close" onclick="closeOverlay('ov-margin')">✕</button><h5 style="color:#ffc107">VOTE MARGIN</h5><div style="font-size:2rem;color:#ffc107;text-align:center;padding:30px 0;" id="ov-marginVal">—</div><div style="text-align:center;color:#aaa;" id="ov-marginLead"></div></div></div>
+<div id="ov-ai"     class="ov-overlay"><div class="ov-inner"><button class="ov-close" onclick="closeOverlay('ov-ai')">✕</button><h5 style="color:#ffc107">AI ANALYTICS LOG</h5><pre id="ov-ai-inner" style="color:#ccc;white-space:pre-wrap;font-size:0.82rem;"></pre></div></div>
+<div id="ov-ec8e"   class="ov-overlay"><div class="ov-inner" style="text-align:center;"><button class="ov-close" onclick="closeOverlay('ov-ec8e')">✕</button><h5 style="color:#ffc107">EC 8E FORM VIEWER</h5><div id="ov-ec8e-inner"></div></div></div>
+<div id="ov-kpi" class="ov-overlay"><div class="ov-inner" style="text-align:center;">
+  <button class="ov-close" onclick="closeOverlay('ov-kpi')">✕</button>
+  <h5 style="color:#ffc107;margin-bottom:20px;">ALL PARTY VOTE TOTALS</h5>
+  <div id="ov-kpi-inner" style="display:flex;gap:15px;justify-content:center;flex-wrap:wrap;"></div>
+</div></div>
+
+
+
 </body>
-</html>
+</html>"
+
 """
