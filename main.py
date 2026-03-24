@@ -11,12 +11,22 @@ from datetime import datetime
 from fastapi import FastAPI, UploadFile, File, Form
 from fastapi.responses import HTMLResponse, StreamingResponse
 from fastapi.staticfiles import StaticFiles
+import cloudinary
+import cloudinary.uploader
 
 # --- CONFIGURATION ---
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
 app = FastAPI()
+
+# ── Cloudinary Configuration ──────────────────────────────────────────────────
+cloudinary.config(
+    cloud_name = os.environ.get("CLOUDINARY_CLOUD_NAME", ""),
+    api_key    = os.environ.get("CLOUDINARY_API_KEY", ""),
+    api_secret = os.environ.get("CLOUDINARY_API_SECRET", "")
+)
+# ─────────────────────────────────────────────────────────────────────────────
 
 # Render-safe Pathing
 LOGO_PATH = os.path.join(os.getcwd(), "static", "logos")
@@ -154,11 +164,25 @@ async def submit(
         votes_json = json.dumps(payload.get("votes", {}))
         ec8e_filename = None
         if ec8e_image and ec8e_image.filename:
-            ext = os.path.splitext(ec8e_image.filename)[1].lower()
             safe_pu = str(payload.get("pu_code", "unk")).replace("/", "_").replace(" ", "_")
-            ec8e_filename = f"{safe_pu}_{uuid.uuid4().hex[:8]}{ext}"
-            with open(os.path.join(EC8E_PATH, ec8e_filename), "wb") as img_f:
-                shutil.copyfileobj(ec8e_image.file, img_f)
+            public_id = f"ec8e_forms/{safe_pu}_{uuid.uuid4().hex[:8]}"
+            try:
+                img_bytes = await ec8e_image.read()
+                upload_result = cloudinary.uploader.upload(
+                    img_bytes,
+                    public_id=public_id,
+                    resource_type="image",
+                    overwrite=True
+                )
+                ec8e_filename = upload_result["secure_url"]
+                logger.info(f"EC8E uploaded to Cloudinary: {ec8e_filename}")
+            except Exception as cloud_err:
+                logger.error(f"Cloudinary upload failed: {cloud_err} — saving locally")
+                ext = os.path.splitext(ec8e_image.filename)[1].lower()
+                local_name = f"{safe_pu}_{uuid.uuid4().hex[:8]}{ext}"
+                with open(os.path.join(EC8E_PATH, local_name), "wb") as img_f:
+                    shutil.copyfileobj(ec8e_image.file, img_f)
+                ec8e_filename = f"/ec8e/{local_name}"
         with get_db() as conn:
             with conn.cursor() as cur:
                 cur.execute("""INSERT INTO field_submissions (
@@ -278,7 +302,11 @@ async def get_dashboard_data():
             data = []
             for r in rows:
                 v = json.loads(r['votes_json']) if isinstance(r['votes_json'], str) else r['votes_json']
-                ec8e_url = f"/ec8e/{r['ec8e_image']}" if r.get('ec8e_image') else None
+                raw = r.get('ec8e_image')
+                if raw:
+                    ec8e_url = raw if raw.startswith('http') else f"/ec8e/{raw}"
+                else:
+                    ec8e_url = None
                 entry = {
                     "pu_name": r['location'], "state": r['state'], "lga": r['lg'], "ward": r['ward'],
                     "latitude": r['lat'], "longitude": r['lon'],
@@ -292,7 +320,7 @@ async def get_dashboard_data():
 
 @app.get("/ec8e/{filename}")
 async def serve_ec8e(filename: str):
-    """Dedicated EC8E image route with proper headers"""
+    """Legacy fallback for locally-stored EC8E images. New uploads use Cloudinary CDN."""
     import mimetypes
     filepath = os.path.join(EC8E_PATH, filename)
     if not os.path.exists(filepath):
