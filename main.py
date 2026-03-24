@@ -673,6 +673,13 @@ DASHBOARD_HTML = """
         .score-grid { display: grid; grid-template-columns: repeat(4, 1fr); gap: 5px; margin-top: 8px; font-size: 0.75rem; text-align: center; }
 
         .ai-box { background: #000; color: #0f0; font-family: monospace; padding: 12px; font-size: 0.75rem; border: 1px solid #030; flex: 1; margin: 10px; overflow-y: auto; }
+        .ov-overlay{display:none !important;position:fixed;inset:0;z-index:99999;background:rgba(0,0,0,0.93);align-items:center;justify-content:center;}
+        .ov-overlay.active{display:flex !important;}
+        .ov-inner{background:#1a1a1a;border:2px solid #ffc107;border-radius:12px;padding:24px;width:95vw;max-height:92vh;overflow-y:auto;position:relative;}
+        .ov-close{position:absolute;top:10px;right:14px;background:none;border:none;color:#ffc107;font-size:1.6rem;cursor:pointer;line-height:1;z-index:10;}
+        .ov-close:hover{color:#fff;}
+        .ov-btn{background:rgba(255,193,7,0.15);border:1px solid #ffc107;color:#ffc107;border-radius:4px;padding:2px 7px;font-size:0.78rem;cursor:pointer;margin-left:6px;}
+        .ov-btn:hover{background:rgba(255,193,7,0.4);}
     </style>
 </head>
 <body>
@@ -970,19 +977,10 @@ DASHBOARD_HTML = """
 </script>
 
 <!-- EC8E Lightbox -->
-<div id="ec8eLightbox" style="display:none;position:fixed;inset:0;z-index:99999;background:rgba(0,0,0,0.96);align-items:center;justify-content:center;" onclick="this.style.display='none'">
+<div id="ec8eLightbox" style="display:none;position:fixed;inset:0;z-index:9999999;background:rgba(0,0,0,0.96);align-items:center;justify-content:center;" onclick="this.style.display='none'">
   <img id="ec8eLightboxImg" src="#" style="max-width:95vw;max-height:95vh;border-radius:8px;border:2px solid #ffc107;">
 </div>
 
-<!-- Maximize Overlays -->
-<style>
-.ov-overlay{display:none;position:fixed;inset:0;z-index:9999;background:rgba(0,0,0,0.92);align-items:center;justify-content:center;}
-.ov-overlay.active{display:flex;}
-.ov-inner{background:#1a1a1a;border:1px solid #ffc107;border-radius:12px;padding:20px;width:95vw;max-height:92vh;overflow-y:auto;position:relative;}
-.ov-close{position:absolute;top:10px;right:14px;background:none;border:none;color:#ffc107;font-size:1.4rem;cursor:pointer;}
-.ov-btn{background:rgba(255,193,7,0.15);border:1px solid #ffc107;color:#ffc107;border-radius:4px;padding:1px 6px;font-size:0.75rem;cursor:pointer;margin-left:6px;}
-.ov-btn:hover{background:rgba(255,193,7,0.35);}
-</style>
 
 <div id="ov-feed"   class="ov-overlay"><div class="ov-inner"><button class="ov-close" onclick="closeOverlay('ov-feed')">✕</button><h5 style="color:#ffc107">LIVE PU FEED</h5><div id="ov-feed-inner"></div></div></div>
 <div id="ov-map"    class="ov-overlay"><div class="ov-inner" style="height:88vh;"><button class="ov-close" onclick="closeOverlay('ov-map')">✕</button><h5 style="color:#ffc107">MAP</h5><div id="ov-map-inner" style="height:80vh;border-radius:8px;overflow:hidden;"></div></div></div>
@@ -1100,7 +1098,7 @@ function showEc8e(url, puName) {
         panel.innerHTML =
             "<div style='font-size:0.7rem;color:#ffc107;font-weight:bold;margin-bottom:6px;padding:0 4px;'>" + puName + "</div>" +
             "<div style='position:relative;'>" +
-            "<img src='" + (url.startsWith('http') ? url : window.location.origin + url) + "' style='max-width:100%;max-height:160px;border-radius:6px;border:2px solid #ffc107;cursor:zoom-in;display:block;margin:0 auto;object-fit:contain;' onclick='openEc8eLightbox(this.src)' title='Click to enlarge'>" +
+            "<img src=\"" + (url.startsWith('http') ? url : window.location.origin + url) + "\" style=\"max-width:100%;max-height:180px;border-radius:6px;border:2px solid #ffc107;cursor:zoom-in;display:block;margin:0 auto;object-fit:contain;\" onerror=\"this.style.opacity='0.3';\" onclick=\"openEc8eLightbox(this.src)\" title=\"Click to enlarge\">" +
             "<div style='position:absolute;bottom:6px;right:6px;background:rgba(0,0,0,0.7);color:#ffc107;font-size:0.6rem;padding:2px 6px;border-radius:4px;pointer-events:none;'>🔍 CLICK TO ENLARGE</div>" +
             "</div>" +
             "<div style='font-size:0.65rem;color:#555;margin-top:5px;text-align:center;'>EC 8E FORM ON FILE</div>";
