@@ -351,7 +351,7 @@ async def index():
     party_cards = "".join([f'''
         <div class="col-4 col-md-2 mb-2">
             <div class="p-2 border rounded text-center bg-white shadow-sm">
-                <img src="/logos/{p}.png" onerror="this.src='https://via.placeholder.com/30?text={p}'" style="height:30px">
+                <img src="/logos/{p}.png" onerror="this.src='https:https://via.placeholder.com/30?text={p}'" style="height:30px">
                 <small class="d-block fw-bold">{p}</small>
                 <input type="number" class="form-control form-control-sm party-v text-center" data-p="{p}" value="0" oninput="calculateTotals()">
             </div>
