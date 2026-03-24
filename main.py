@@ -20,14 +20,14 @@ app = FastAPI()
 
 # Render-safe Pathing
 LOGO_PATH = os.path.join(os.getcwd(), "static", "logos")
-if os.path.exists(LOGO_PATH):
-    app.mount("/logos", StaticFiles(directory=LOGO_PATH), name="logos")
+os.makedirs(LOGO_PATH, exist_ok=True)
+app.mount("/logos", StaticFiles(directory=LOGO_PATH), name="logos")
 
 STATIC_PATH = os.path.join(os.getcwd(), "static")
 EC8E_PATH = os.path.join(os.getcwd(), "static", "ec8e")
 os.makedirs(EC8E_PATH, exist_ok=True)
-if os.path.exists(STATIC_PATH):
-    app.mount("/static", StaticFiles(directory=STATIC_PATH), name="static")
+os.makedirs(STATIC_PATH, exist_ok=True)
+app.mount("/static", StaticFiles(directory=STATIC_PATH), name="static")
 
 # --- DATABASE CONNECTION ---
 DATABASE_URL = os.environ.get("DATABASE_URL", "postgresql://election_v3_db_user:KHjYceeGY0OL5w1RMhVFM18AyRipv9Tl@dpg-d6gnomfkijhs73f1cfe0-a.oregon-postgres.render.com/election_v3_db")
@@ -278,7 +278,7 @@ async def get_dashboard_data():
             data = []
             for r in rows:
                 v = json.loads(r['votes_json']) if isinstance(r['votes_json'], str) else r['votes_json']
-                ec8e_url = f"/static/ec8e/{r['ec8e_image']}" if r.get('ec8e_image') else None
+                ec8e_url = f"/ec8e/{r['ec8e_image']}" if r.get('ec8e_image') else None
                 entry = {
                     "pu_name": r['location'], "state": r['state'], "lga": r['lg'], "ward": r['ward'],
                     "latitude": r['lat'], "longitude": r['lon'],
@@ -288,6 +288,24 @@ async def get_dashboard_data():
                     entry[f"votes_party_{p}"] = v.get(p, 0)
                 data.append(entry)
             return data
+
+
+@app.get("/ec8e/{filename}")
+async def serve_ec8e(filename: str):
+    """Dedicated EC8E image route with proper headers"""
+    import mimetypes
+    filepath = os.path.join(EC8E_PATH, filename)
+    if not os.path.exists(filepath):
+        from fastapi import HTTPException
+        raise HTTPException(status_code=404, detail="Image not found")
+    mime = mimetypes.guess_type(filepath)[0] or "image/jpeg"
+    with open(filepath, "rb") as f:
+        content = f.read()
+    from fastapi.responses import Response
+    return Response(content=content, media_type=mime, headers={
+        "Cache-Control": "public, max-age=86400",
+        "Access-Control-Allow-Origin": "*"
+    })
 
 @app.get("/", response_class=HTMLResponse)
 async def index():
@@ -1043,7 +1061,7 @@ function closeOverlay(id) {
 }
 
 function openEc8eLightbox(url) {
-    document.getElementById("ec8eLightboxImg").src = url;
+    document.getElementById("ec8eLightboxImg").src = url.startsWith("http") ? url : window.location.origin + url;
     document.getElementById("ec8eLightbox").style.display = "flex";
 }
 
@@ -1054,7 +1072,7 @@ function showEc8e(url, puName) {
         panel.innerHTML =
             "<div style='font-size:0.7rem;color:#ffc107;font-weight:bold;margin-bottom:6px;padding:0 4px;'>" + puName + "</div>" +
             "<div style='position:relative;'>" +
-            "<img src='" + url + "' style='max-width:100%;max-height:160px;border-radius:6px;border:2px solid #ffc107;cursor:zoom-in;display:block;margin:0 auto;object-fit:contain;' onclick='openEc8eLightbox(this.src)' title='Click to enlarge'>" +
+            "<img src='" + (url.startsWith('http') ? url : window.location.origin + url) + "' style='max-width:100%;max-height:160px;border-radius:6px;border:2px solid #ffc107;cursor:zoom-in;display:block;margin:0 auto;object-fit:contain;' onclick='openEc8eLightbox(this.src)' title='Click to enlarge'>" +
             "<div style='position:absolute;bottom:6px;right:6px;background:rgba(0,0,0,0.7);color:#ffc107;font-size:0.6rem;padding:2px 6px;border-radius:4px;pointer-events:none;'>🔍 CLICK TO ENLARGE</div>" +
             "</div>" +
             "<div style='font-size:0.65rem;color:#555;margin-top:5px;text-align:center;'>EC 8E FORM ON FILE</div>";
