@@ -845,180 +845,139 @@ DASHBOARD_HTML = """
   <img id="ec8eLightboxImg" src="#" style="max-width:95vw;max-height:95vh;border-radius:8px;border:2px solid #ffc107;">
 </div>
 
+<!-- ── Maximize Overlays ── -->
 <style>
-.ov-overlay{display:none;position:fixed;inset:0;z-index:9999;background:rgba(0,0,0,0.92);align-items:center;justify-content:center;padding:20px;}
-.ov-inner{background:#1a1a1a;border:1px solid #ffc107;border-radius:12px;padding:20px;width:95vw;max-height:92vh;overflow-y:auto;position:relative;color:#fff;}
+.ov-overlay{display:none;position:fixed;inset:0;z-index:9999;background:rgba(0,0,0,0.92);align-items:center;justify-content:center;}
+.ov-overlay.active{display:flex;}
+.ov-inner{background:#1a1a1a;border:1px solid #ffc107;border-radius:12px;padding:20px;width:95vw;max-height:92vh;overflow-y:auto;position:relative;}
 .ov-close{position:absolute;top:10px;right:14px;background:none;border:none;color:#ffc107;font-size:1.4rem;cursor:pointer;}
-.ov-btn{background:rgba(255,193,7,0.15);border:1px solid #ffc107;color:#ffc107;border-radius:4px;padding:1px 7px;font-size:0.65rem;cursor:pointer;margin-left:6px;vertical-align:middle;}
+.ov-btn{background:rgba(255,193,7,0.15);border:1px solid #ffc107;color:#ffc107;border-radius:4px;padding:1px 6px;font-size:0.75rem;cursor:pointer;margin-left:6px;}
 .ov-btn:hover{background:rgba(255,193,7,0.35);}
 </style>
 
-<!-- Overlay: PU Feed -->
-<div id="ov-feed" class="ov-overlay" onclick="if(event.target===this)closeOverlay('ov-feed')">
-  <div class="ov-inner"><button class="ov-close" onclick="closeOverlay('ov-feed')">✕</button>
-    <div style="font-weight:bold;color:#ffc107;margin-bottom:10px;">LIVE PU FEED</div>
-    <input id="ov-feed-search" type="text" placeholder="Search PU..." oninput="renderOvFeed()" class="form-control form-control-sm bg-dark text-white border-secondary mb-2">
-    <div id="ov-feed-list" style="max-height:75vh;overflow-y:auto;"></div>
-  </div>
-</div>
-<!-- Overlay: Map -->
-<div id="ov-map" class="ov-overlay" onclick="if(event.target===this)closeOverlay('ov-map')">
-  <div class="ov-inner" style="padding:10px;"><button class="ov-close" onclick="closeOverlay('ov-map')">✕</button>
-    <div id="ov-map-div" style="height:80vh;border-radius:10px;"></div>
-  </div>
-</div>
-<!-- Overlay: Bar Chart -->
-<div id="ov-bar" class="ov-overlay" onclick="if(event.target===this)closeOverlay('ov-bar')">
-  <div class="ov-inner"><button class="ov-close" onclick="closeOverlay('ov-bar')">✕</button>
-    <div style="font-weight:bold;color:#ffc107;margin-bottom:10px;">VOTE COUNT — BAR CHART</div>
-    <canvas id="ov-barChart" style="max-height:75vh;"></canvas>
-  </div>
-</div>
-<!-- Overlay: Pie Chart -->
-<div id="ov-pie" class="ov-overlay" onclick="if(event.target===this)closeOverlay('ov-pie')">
-  <div class="ov-inner"><button class="ov-close" onclick="closeOverlay('ov-pie')">✕</button>
-    <div style="font-weight:bold;color:#ffc107;margin-bottom:10px;">VOTE SHARE — PIE CHART</div>
-    <canvas id="ov-pieChart" style="max-height:75vh;"></canvas>
-  </div>
-</div>
-<!-- Overlay: Vote Margin -->
-<div id="ov-margin" class="ov-overlay" onclick="if(event.target===this)closeOverlay('ov-margin')">
-  <div class="ov-inner" style="text-align:center;"><button class="ov-close" onclick="closeOverlay('ov-margin')">✕</button>
-    <div style="font-weight:bold;color:#ffc107;margin-bottom:16px;">VOTE MARGIN ANALYSIS</div>
-    <div class="margin-card"><small class="text-secondary">ACCORD LEAD/LAG</small>
-      <span id="ov-marginVal" class="margin-val" style="font-size:3rem;">0</span>
-      <small id="ov-marginLead" class="fw-bold" style="font-size:1rem;">AWAITING DATA</small>
-    </div>
-  </div>
-</div>
-<!-- Overlay: AI Log -->
-<div id="ov-ai" class="ov-overlay" onclick="if(event.target===this)closeOverlay('ov-ai')">
-  <div class="ov-inner"><button class="ov-close" onclick="closeOverlay('ov-ai')">✕</button>
-    <div style="font-weight:bold;color:#ffc107;margin-bottom:10px;">AI ANALYTICS LOG</div>
-    <div id="ov-ai-box" style="background:#000;color:#0f0;font-family:monospace;padding:12px;font-size:0.85rem;border-radius:6px;min-height:300px;white-space:pre-wrap;"></div>
-  </div>
-</div>
-<!-- Overlay: EC8E Viewer -->
-<div id="ov-ec8e" class="ov-overlay" onclick="if(event.target===this)closeOverlay('ov-ec8e')">
-  <div class="ov-inner" style="text-align:center;"><button class="ov-close" onclick="closeOverlay('ov-ec8e')">✕</button>
-    <div style="font-weight:bold;color:#ffc107;margin-bottom:10px;">EC 8E FORM VIEWER</div>
-    <div id="ov-ec8e-inner"></div>
-  </div>
-</div>
+<div id="ov-feed"   class="ov-overlay"><div class="ov-inner"><button class="ov-close" onclick="closeOverlay('ov-feed')">✕</button><h5 style="color:#ffc107">LIVE PU FEED</h5><div id="ov-feed-inner"></div></div></div>
+<div id="ov-map"    class="ov-overlay"><div class="ov-inner" style="height:88vh;"><button class="ov-close" onclick="closeOverlay('ov-map')">✕</button><h5 style="color:#ffc107">MAP</h5><div id="ov-map-inner" style="height:80vh;border-radius:8px;overflow:hidden;"></div></div></div>
+<div id="ov-bar"    class="ov-overlay"><div class="ov-inner"><button class="ov-close" onclick="closeOverlay('ov-bar')">✕</button><h5 style="color:#ffc107">BAR CHART</h5><canvas id="ov-barChart" height="300"></canvas></div></div>
+<div id="ov-pie"    class="ov-overlay"><div class="ov-inner"><button class="ov-close" onclick="closeOverlay('ov-pie')">✕</button><h5 style="color:#ffc107">PIE CHART</h5><canvas id="ov-pieChart" height="300"></canvas></div></div>
+<div id="ov-margin" class="ov-overlay"><div class="ov-inner"><button class="ov-close" onclick="closeOverlay('ov-margin')">✕</button><h5 style="color:#ffc107">VOTE MARGIN</h5><div style="font-size:2rem;color:#ffc107;text-align:center;padding:30px 0;" id="ov-marginVal">—</div><div style="text-align:center;color:#aaa;" id="ov-marginLead"></div></div></div>
+<div id="ov-ai"     class="ov-overlay"><div class="ov-inner"><button class="ov-close" onclick="closeOverlay('ov-ai')">✕</button><h5 style="color:#ffc107">AI ANALYTICS LOG</h5><pre id="ov-ai-inner" style="color:#ccc;white-space:pre-wrap;font-size:0.82rem;"></pre></div></div>
+<div id="ov-ec8e"   class="ov-overlay"><div class="ov-inner" style="text-align:center;"><button class="ov-close" onclick="closeOverlay('ov-ec8e')">✕</button><h5 style="color:#ffc107">EC 8E FORM VIEWER</h5><div id="ov-ec8e-inner"></div></div></div>
 
 <script>
-// ── EC8E viewer ────────────────────────────────────────────────────────────
-function showEc8e(imgUrl, puName) {
-    const panel = document.getElementById("ec8eViewerPanel");
-    if (!panel) return;
-    if (imgUrl && imgUrl !== "null" && imgUrl !== "undefined") {
-        panel.innerHTML = `<p style="font-size:0.7rem;color:#aaa;margin:0 0 6px">${puName}</p><img src="${imgUrl}" style="max-width:100%;border-radius:6px;border:1px solid #ffc107;cursor:zoom-in;" onclick="openEc8eLightbox('${imgUrl}')">`;
-    } else {
-        panel.innerHTML = '<span style="color:#555;font-size:0.75rem;font-style:italic;">No EC 8E image for this PU</span>';
+function openOverlay(id) {
+    const el = document.getElementById(id);
+    if (!el) return;
+    el.classList.add("active");
+
+    if (id === "ov-feed") {
+        const src = document.getElementById("feedList");
+        const dst = document.getElementById("ov-feed-inner");
+        if (src && dst) dst.innerHTML = src.innerHTML;
+    }
+    if (id === "ov-map") {
+        const dst = document.getElementById("ov-map-inner");
+        if (dst && !dst._ovMap) {
+            dst._ovMap = L.map(dst, { zoomControl: true }).setView([7.56, 4.52], 9);
+            L.tileLayer("https://{s}.basemaps.cartocdn.com/dark_all/{z}/{x}/{y}{r}.png").addTo(dst._ovMap);
+            window._ovMapInst = dst._ovMap;
+        }
+        setTimeout(() => { if (dst._ovMap) dst._ovMap.invalidateSize(); }, 200);
+    }
+    if (id === "ov-bar" || id === "ov-pie") {
+        const PARTIES = ["ACCORD","AA","AAC","ADC","ADP","APGA","APC","APM","APP","BP","NNPP","PRP","YPP","ZLP"];
+        const colors  = ["#ffc107","#6c757d","#17a2b8","#138808","#fd7e14","#6f42c1","#0b3d91","#20c997","#e83e8c","#dc3545","#0dcaf0","#198754","#ffc0cb","#ff6b35"];
+        const vals    = PARTIES.map(p => { const el = document.getElementById("nav-"+p); return el ? parseInt(el.innerText.replace(/,/g,""))||0 : 0; });
+        if (id === "ov-bar") {
+            if (window._ovBar) window._ovBar.destroy();
+            window._ovBar = new Chart(document.getElementById("ov-barChart"), {
+                type: "bar",
+                data: { labels: PARTIES, datasets: [{ data: vals, backgroundColor: colors }] },
+                options: { maintainAspectRatio: false, plugins: { legend: { display: false }, datalabels: { color: "#fff", anchor: "end", align: "top", formatter: v => v > 0 ? v.toLocaleString() : "" } }, scales: { y: { beginAtZero: true, ticks: { color: "#fff" }, grid: { color: "#222" } }, x: { ticks: { color: "#fff", font: { size: 9 } } } } }
+            });
+        }
+        if (id === "ov-pie") {
+            const total = vals.reduce((a,b)=>a+b,0);
+            if (window._ovPie) window._ovPie.destroy();
+            window._ovPie = new Chart(document.getElementById("ov-pieChart"), {
+                type: "doughnut",
+                data: { labels: PARTIES, datasets: [{ data: vals, backgroundColor: colors, borderWidth: 0 }] },
+                options: { maintainAspectRatio: false, plugins: { legend: { position: "bottom", labels: { color: "#fff", font: { size: 10 } } }, datalabels: { color: "#fff", font: { weight: "bold" }, formatter: v => total > 0 && v > 0 ? ((v/total)*100).toFixed(1)+"%" : "" } } }
+            });
+        }
+    }
+    if (id === "ov-margin") {
+        const v = document.getElementById("marginVal");
+        const l = document.getElementById("marginLead");
+        if (v) { document.getElementById("ov-marginVal").innerText = v.innerText; document.getElementById("ov-marginVal").style.color = v.style.color; }
+        if (l) document.getElementById("ov-marginLead").innerText = l.innerText;
+    }
+    if (id === "ov-ai") {
+        const src = document.getElementById("ai_box");
+        if (src) document.getElementById("ov-ai-inner").innerText = src.innerText;
+    }
+    if (id === "ov-ec8e") {
+        const src = document.getElementById("ec8eViewerPanel");
+        if (src) document.getElementById("ov-ec8e-inner").innerHTML = src.innerHTML;
     }
 }
-function openEc8eLightbox(src) {
-    document.getElementById("ec8eLightboxImg").src = src;
+
+function closeOverlay(id) {
+    const el = document.getElementById(id);
+    if (el) el.classList.remove("active");
+}
+
+function openEc8eLightbox(url) {
+    document.getElementById("ec8eLightboxImg").src = url;
     document.getElementById("ec8eLightbox").style.display = "flex";
 }
 
-// ── Maximize / Minimize ────────────────────────────────────────────────────
-function openOverlay(id) {
-    const ov = document.getElementById(id);
-    if (ov) ov.style.display = "flex";
-    if (id === "ov-bar")    renderOvBar();
-    if (id === "ov-pie")    renderOvPie();
-    if (id === "ov-map")    initOvMap();
-    if (id === "ov-feed")   renderOvFeed();
-    if (id === "ov-margin") syncOvMargin();
-    if (id === "ov-ai")     document.getElementById("ov-ai-box").innerText = document.getElementById("ai_box").innerText;
-    if (id === "ov-ec8e")   document.getElementById("ov-ec8e-inner").innerHTML = document.getElementById("ec8eViewerPanel").innerHTML;
-}
-function closeOverlay(id) { const ov = document.getElementById(id); if (ov) ov.style.display = "none"; }
-
-let ovBar=null, ovPie=null, ovMap=null, lastTotals={};
-
-function renderOvBar() {
-    if(ovBar){ovBar.destroy();ovBar=null;}
-    const labels=["ACCORD","APC","ADC"];
-    const data=labels.map(p=>lastTotals["votes_party_"+p]||0);
-    ovBar=new Chart(document.getElementById("ov-barChart"),{type:"bar",data:{labels,datasets:[{data,backgroundColor:["#ffc107","#0d6efd","#198754"],borderRadius:6}]},plugins:[ChartDataLabels],options:{responsive:true,plugins:{legend:{display:false},datalabels:{color:"#fff",anchor:"end",align:"top",font:{weight:"bold"}}},scales:{y:{ticks:{color:"#aaa"},grid:{color:"#333"}},x:{ticks:{color:"#fff",font:{weight:"bold"}},grid:{display:false}}}}});
-}
-function renderOvPie() {
-    if(ovPie){ovPie.destroy();ovPie=null;}
-    const labels=["ACCORD","APC","ADC"];
-    const data=labels.map(p=>lastTotals["votes_party_"+p]||0);
-    ovPie=new Chart(document.getElementById("ov-pieChart"),{type:"doughnut",data:{labels,datasets:[{data,backgroundColor:["#ffc107","#0d6efd","#198754"],borderWidth:1}]},plugins:[ChartDataLabels],options:{responsive:true,plugins:{legend:{position:"bottom",labels:{color:"#fff"}},datalabels:{color:"#fff",formatter:(v,c)=>{const s=c.chart.data.datasets[0].data.reduce((a,b)=>a+b,0);return s>0?(v/s*100).toFixed(1)+"%":"0%";}}}}});
-}
-function initOvMap() {
-    if(ovMap){setTimeout(()=>ovMap.invalidateSize(),300);return;}
-    ovMap=L.map("ov-map-div").setView([7.56,4.52],9);
-    L.tileLayer("https://{s}.basemaps.cartocdn.com/dark_all/{z}/{x}/{y}{r}.png",{attribution:"©OSM ©CARTO"}).addTo(ovMap);
-    globalData.forEach(d=>{if(d.latitude&&d.longitude)L.circleMarker([d.latitude,d.longitude],{radius:6,color:"#ffc107",fillColor:"#ffc107",fillOpacity:0.8}).bindPopup(`<b>${d.pu_name}</b>`).addTo(ovMap);});
-    setTimeout(()=>ovMap.invalidateSize(),300);
-}
-function renderOvFeed() {
-    const q=(document.getElementById("ov-feed-search").value||"").toLowerCase();
-    const filtered=globalData.filter(d=>!q||d.pu_name.toLowerCase().includes(q));
-    document.getElementById("ov-feed-list").innerHTML=filtered.map(d=>`
-        <div style="background:#1e1e1e;border-radius:8px;padding:10px;margin-bottom:8px;border-left:4px solid #ffc107;cursor:pointer;" onclick="showEc8e('${d.ec8e_image}','${d.pu_name}');closeOverlay('ov-feed')">
-            <div style="font-size:0.8rem;font-weight:bold;">${d.pu_name}</div>
-            <div style="font-size:0.72rem;color:#aaa;">${d.lga} › ${d.ward}</div>
-            <div style="display:grid;grid-template-columns:repeat(3,1fr);gap:4px;margin-top:6px;font-size:0.75rem;">
-                <div>ACCORD<b style="color:#ffc107;display:block">${d.votes_party_ACCORD||0}</b></div>
-                <div>APC<b style="display:block">${d.votes_party_APC||0}</b></div>
-                <div>ADC<b style="display:block">${d.votes_party_ADC||0}</b></div>
-            </div></div>`).join("");
-}
-function syncOvMargin() {
-    const v=document.getElementById("marginVal"),l=document.getElementById("marginLead");
-    document.getElementById("ov-marginVal").innerText=v.innerText;
-    document.getElementById("ov-marginVal").style.color=v.style.color;
-    document.getElementById("ov-marginLead").innerText=l.innerText;
+function showEc8e(url, puName) {
+    const panel = document.getElementById("ec8eViewerPanel");
+    if (!panel) return;
+    if (url) {
+        panel.innerHTML = "<div style=\"font-size:0.75rem;color:#aaa;margin-bottom:6px;\">" + puName + "</div><img src=\"" + url + "\" style=\"max-width:100%;border-radius:6px;border:1px solid #ffc107;cursor:pointer;\" onclick=\"openEc8eLightbox(this.src)\">";
+    } else {
+        panel.innerHTML = "<span style=\"color:#555;font-size:0.75rem;font-style:italic;\">No EC 8E image for this polling unit</span>";
+    }
 }
 
-// Intercept updateUI to cache totals
-const _origUpdateUI = updateUI;
-function updateUI(data) {
-    _origUpdateUI(data);
-    const PARTIES=["ACCORD","AA","AAC","ADC","ADP","APGA","APC","APM","APP","BP","NNPP","PRP","YPP","ZLP"];
-    const t={}; PARTIES.forEach(p=>t["votes_party_"+p]=0);
-    data.forEach(d=>PARTIES.forEach(p=>t["votes_party_"+p]+=(d["votes_party_"+p]||0)));
-    lastTotals=t;
-}
-
-// Inject ⛶ buttons and EC8E panel into DOM after init
+// Inject ⛶ buttons and EC8E panel after DOM loads
 document.addEventListener("DOMContentLoaded", function() {
     // EC8E viewer panel in right sidebar
     const rightPanel = document.querySelector(".side-panel:last-of-type");
     if (rightPanel) {
         const refreshBtn = rightPanel.querySelector(".mt-auto");
         const ec8eDiv = document.createElement("div");
-        ec8eDiv.innerHTML = `<div class="panel-header">EC 8E FORM VIEWER <button class="ov-btn" onclick="openOverlay('ov-ec8e')">⛶</button></div><div id="ec8eViewerPanel" style="background:#111;border-radius:8px;padding:10px;margin:8px;border:1px solid #333;text-align:center;min-height:60px;"><span style="color:#555;font-size:0.75rem;font-style:italic;">Click a polling unit to view its EC 8E form</span></div>`;
-        rightPanel.insertBefore(ec8eDiv, refreshBtn);
+        ec8eDiv.innerHTML = "<div class=\"panel-header\">EC 8E FORM VIEWER <button class=\"ov-btn\" onclick=\"openOverlay('ov-ec8e')\">⛶</button></div><div id=\"ec8eViewerPanel\" style=\"background:#111;border-radius:8px;padding:10px;margin:8px;border:1px solid #333;text-align:center;min-height:60px;\"><span style=\"color:#555;font-size:0.75rem;font-style:italic;\">Click a polling unit to view its EC 8E form</span></div>";
+        rightPanel.insertBefore(ec8eDiv, refreshBtn || null);
     }
-    // ⛶ buttons on existing panel headers
-    [["LIVE PU FEED","ov-feed"],["VOTE MARGIN","ov-margin"],["AI ANALYTICS","ov-ai"]].forEach(([label,id])=>{
-        document.querySelectorAll(".panel-header").forEach(h=>{
-            if(h.textContent.includes(label)&&!h.querySelector(".ov-btn")){
-                const b=document.createElement("button");b.className="ov-btn";b.innerText="⛶";b.onclick=()=>openOverlay(id);h.appendChild(b);
+    // ⛶ buttons on panel headers
+    [["LIVE PU FEED","ov-feed"],["VOTE MARGIN","ov-margin"],["AI ANALYTICS","ov-ai"]].forEach(function(pair) {
+        document.querySelectorAll(".panel-header").forEach(function(h) {
+            if (h.textContent.includes(pair[0]) && !h.querySelector(".ov-btn")) {
+                const b = document.createElement("button"); b.className = "ov-btn"; b.innerText = "⛶"; b.onclick = function(){ openOverlay(pair[1]); }; h.appendChild(b);
             }
         });
     });
     // ⛶ on chart boxes
-    document.querySelectorAll(".chart-box").forEach((box,idx)=>{
-        const ids=["ov-bar","ov-pie"];
-        const b=document.createElement("button");b.className="ov-btn";b.style.cssText="position:absolute;top:6px;right:8px;z-index:10;";b.innerText="⛶";b.onclick=()=>openOverlay(ids[idx]);box.style.position="relative";box.appendChild(b);
+    document.querySelectorAll(".chart-box").forEach(function(box, i) {
+        const ids = ["ov-bar","ov-pie"];
+        if (!ids[i]) return;
+        const b = document.createElement("button"); b.className = "ov-btn"; b.style.cssText = "position:absolute;top:6px;right:8px;z-index:10;"; b.innerText = "⛶"; b.onclick = function(){ openOverlay(ids[i]); }; box.style.position = "relative"; box.appendChild(b);
     });
     // ⛶ on map
-    const mapEl=document.getElementById("map");
-    if(mapEl&&mapEl.parentElement){
-        const b=document.createElement("button");b.className="ov-btn";b.style.cssText="position:absolute;top:8px;right:8px;z-index:999;";b.innerText="⛶";b.onclick=()=>openOverlay("ov-map");mapEl.parentElement.style.position="relative";mapEl.parentElement.appendChild(b);
+    const mapEl = document.getElementById("map");
+    if (mapEl) {
+        const b = document.createElement("button"); b.className = "ov-btn"; b.style.cssText = "position:absolute;top:8px;right:8px;z-index:1000;"; b.innerText = "⛶"; b.onclick = function(){ openOverlay("ov-map"); }; mapEl.style.position = "relative"; mapEl.appendChild(b);
     }
 });
 
-document.addEventListener("keydown",e=>{
-    if(e.key==="Escape"){["ov-bar","ov-pie","ov-map","ov-feed","ov-margin","ov-ai","ov-ec8e"].forEach(id=>closeOverlay(id));document.getElementById("ec8eLightbox").style.display="none";}
+// Esc key closes all overlays
+document.addEventListener("keydown", function(e) {
+    if (e.key === "Escape") {
+        ["ov-bar","ov-pie","ov-map","ov-feed","ov-margin","ov-ai","ov-ec8e"].forEach(function(id){ closeOverlay(id); });
+        document.getElementById("ec8eLightbox").style.display = "none";
+    }
 });
 </script>
 
