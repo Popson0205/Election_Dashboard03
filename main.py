@@ -39,11 +39,11 @@ cloudinary.config(
 # ─────────────────────────────────────────────────────────────────────────────
 
 # Render-safe Pathing
-LOGO_PATH = "/home/user/work/static/logos"
+LOGO_PATH = "https://github.com/Popson0205/Election_Dashboard03/tree/main/static/logos"
 os.makedirs(LOGO_PATH, exist_ok=True)
 app.mount("/logos", StaticFiles(directory=LOGO_PATH), name="logos")
 
-STATIC_PATH = "/home/user/work/static"
+STATIC_PATH = "https://github.com/Popson0205/Election_Dashboard03/tree/main/static/logos"
 EC8E_PATH = "/home/user/work/static/ec8e"
 os.makedirs(EC8E_PATH, exist_ok=True)
 os.makedirs(STATIC_PATH, exist_ok=True)
