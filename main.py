@@ -321,7 +321,13 @@ async def get_dashboard_data():
                 entry = {
                     "pu_name": r['location'], "state": r['state'], "lga": r['lg'], "ward": r['ward'],
                     "latitude": r['lat'], "longitude": r['lon'],
-                    "ec8e_image": ec8e_url
+                    "ec8e_image": ec8e_url,
+                    "reg_voters": r.get('reg_voters') or 0,
+                    "total_accredited": r.get('total_accredited') or 0,
+                    "total_cast": r.get('total_cast') or 0,
+                    "officer_id": r.get('officer_id') or '',
+                    "timestamp": str(r.get('timestamp') or ''),
+                    "pu_code": r.get('pu_code') or ''
                 }
                 for p in ["ACCORD","AA","AAC","ADC","ADP","APGA","APC","APM","APP","BP","NNPP","PRP","YPP","ZLP"]:
                     entry[f"votes_party_{p}"] = v.get(p, 0)
@@ -634,6 +640,111 @@ async def index():
 """
 
 # --- DASHBOARD PAGE ---
+
+# ── INSIGHT API ENDPOINTS ─────────────────────────────────────────────────────
+
+@app.get("/api/lga_completion")
+async def lga_completion():
+    TOTAL_PUS_PER_LGA = {
+        "osogbo": 218,"olorunda": 210,"egbedore": 72,"ede north": 88,"ede south": 50,
+        "ejigbo": 120,"ife central": 148,"ife east": 118,"ife north": 74,"ife south": 84,
+        "ifedayo": 50,"ifelodun": 136,"ila": 90,"ilesa east": 98,"ilesa west": 100,
+        "irepodun": 130,"irewole": 100,"isokan": 72,"iwo": 200,"obokun": 88,
+        "odo-otin": 110,"ola-oluwa": 64,"oriade": 100,"orolu": 96,
+        "atakumosa east": 76,"atakumosa west": 68,"ayedaade": 112,"ayedire": 68,
+        "boluwaduro": 56,"boripe": 90
+    }
+    try:
+        conn = get_db(); cur = conn.cursor()
+        cur.execute("SELECT LOWER(lg) as lga, COUNT(*) as submitted FROM field_submissions GROUP BY LOWER(lg)")
+        rows = cur.fetchall(); cur.close(); conn.close()
+        result = []
+        for r in rows:
+            lga = r["lga"] or ""
+            submitted = r["submitted"]
+            total = TOTAL_PUS_PER_LGA.get(lga.lower(), 100)
+            pct = round((submitted / total) * 100, 1)
+            result.append({"lga": lga.upper(), "submitted": submitted, "total": total, "pct": pct})
+        result.sort(key=lambda x: x["pct"], reverse=True)
+        return result
+    except Exception as e:
+        return []
+
+@app.get("/api/swing_pus")
+async def swing_pus():
+    try:
+        conn = get_db(); cur = conn.cursor()
+        cur.execute("SELECT * FROM field_submissions")
+        rows = cur.fetchall(); cur.close(); conn.close()
+        PARTIES_LIST = ["ACCORD","AA","AAC","ADC","ADP","APGA","APC","APM","APP","BP","NNPP","PRP","YPP","ZLP"]
+        swing = []
+        for r in rows:
+            try:
+                v = json.loads(r["votes_json"]) if isinstance(r["votes_json"], str) else (r["votes_json"] or {})
+            except Exception:
+                v = {}
+            accord = v.get("ACCORD", 0)
+            rivals = {p: v.get(p, 0) for p in PARTIES_LIST if p != "ACCORD"}
+            if not rivals: continue
+            top_rival = max(rivals, key=rivals.get)
+            margin = accord - rivals[top_rival]
+            if abs(margin) <= 15:
+                swing.append({"pu_name": r["location"], "lga": r["lg"], "ward": r["ward"],
+                               "accord": accord, "rival": top_rival,
+                               "rival_votes": rivals[top_rival], "margin": margin})
+        swing.sort(key=lambda x: abs(x["margin"]))
+        return swing
+    except Exception as e:
+        return []
+
+@app.get("/api/integrity_flags")
+async def integrity_flags():
+    try:
+        conn = get_db(); cur = conn.cursor()
+        cur.execute("SELECT * FROM field_submissions")
+        rows = cur.fetchall(); cur.close(); conn.close()
+        flags = []
+        for r in rows:
+            issues = []
+            total_cast = r.get("total_cast") or 0
+            accredited = r.get("total_accredited") or 0
+            ec8e = r.get("ec8e_image")
+            if accredited > 0 and total_cast > accredited:
+                issues.append("Overvoting: votes exceed accredited")
+            if not ec8e:
+                issues.append("No EC8E image uploaded")
+            if total_cast == 0:
+                issues.append("Zero total votes recorded")
+            if issues:
+                flags.append({"pu_name": r["location"], "lga": r["lg"], "ward": r["ward"],
+                               "issues": issues,
+                               "severity": "high" if any("Overvoting" in i for i in issues) else "medium"})
+        return flags
+    except Exception as e:
+        return []
+
+@app.get("/api/collation_timeline")
+async def collation_timeline():
+    try:
+        conn = get_db(); cur = conn.cursor()
+        cur.execute("SELECT location, lg, timestamp FROM field_submissions ORDER BY timestamp ASC")
+        rows = cur.fetchall(); cur.close(); conn.close()
+        return [{"pu_name": r["location"], "lga": r["lg"], "timestamp": str(r["timestamp"])} for r in rows]
+    except Exception as e:
+        return []
+
+@app.get("/api/agent_leaderboard")
+async def agent_leaderboard():
+    try:
+        conn = get_db(); cur = conn.cursor()
+        cur.execute("""SELECT officer_id, COUNT(*) as submissions, MAX(timestamp) as last_submission
+                       FROM field_submissions GROUP BY officer_id ORDER BY submissions DESC LIMIT 20""")
+        rows = cur.fetchall(); cur.close(); conn.close()
+        return [dict(r) for r in rows]
+    except Exception as e:
+        return []
+
+# ─────────────────────────────────────────────────────────────────────────────
 @app.get("/dashboard", response_class=HTMLResponse)
 async def dashboard_page():
     from fastapi.responses import HTMLResponse as _HR
@@ -657,7 +768,7 @@ DASHBOARD_HTML = """
 
     <style>
         :root { --gold: #ffc107; --dark: #0a0a0a; --panel: #141414; }
-        body { background-color: var(--dark); color: #fff; font-family: 'Segoe UI', sans-serif; overflow: hidden; height: 100vh; margin: 0; }
+        body { background-color: var(--dark); color: #fff; font-family: 'Segoe UI', sans-serif; overflow-y: auto; height: 100vh; margin: 0; }
 
         .navbar-custom { background: #000; border-bottom: 2px solid var(--gold); padding: 10px 20px; display: flex; align-items: center; justify-content: space-between; }
         .brand-title { color: var(--gold); font-weight: 900; font-size: 1.1rem; letter-spacing: 1px; }
@@ -695,6 +806,24 @@ DASHBOARD_HTML = """
         .ov-close:hover{color:#fff;}
         .ov-btn{background:rgba(255,193,7,0.15);border:1px solid #ffc107;color:#ffc107;border-radius:4px;padding:2px 7px;font-size:0.78rem;cursor:pointer;margin-left:6px;}
         .ov-btn:hover{background:rgba(255,193,7,0.4);}
+        /* ── INSIGHT PANELS ── */
+        .insight-card { background:#1a1a1a; border:1px solid #2a2a2a; border-radius:8px; padding:10px; }
+        .insight-title { font-size:0.65rem; color:#ffc107; font-weight:bold; text-transform:uppercase; margin-bottom:6px; border-bottom:1px solid #2a2a2a; padding-bottom:4px; }
+        .threshold-bar { height:8px; background:#222; border-radius:4px; overflow:hidden; margin:4px 0; }
+        .threshold-fill { height:100%; background:linear-gradient(90deg,#ffc107,#00ff88); border-radius:4px; transition:width 0.5s; }
+        .swing-item { background:#1e1e1e; border-left:3px solid #ff4444; border-radius:4px; padding:6px 8px; margin-bottom:4px; font-size:0.7rem; }
+        .swing-item.lead { border-left-color:#ffc107; }
+        .flag-item { background:#1e1e1e; border-left:3px solid #ff6600; border-radius:4px; padding:6px 8px; margin-bottom:4px; font-size:0.7rem; }
+        .flag-item.high { border-left-color:#ff0000; }
+        .lga-row { display:flex; align-items:center; gap:6px; margin-bottom:5px; font-size:0.68rem; }
+        .lga-name { width:90px; color:#aaa; white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
+        .lga-bar-wrap { flex:1; height:6px; background:#222; border-radius:3px; overflow:hidden; }
+        .lga-bar-fill { height:100%; background:#ffc107; border-radius:3px; }
+        .lga-pct { width:36px; text-align:right; color:#ffc107; font-weight:bold; }
+        .timeline-dot { display:inline-block; width:8px; height:8px; border-radius:50%; background:#ffc107; margin-right:6px; }
+        .agent-row { display:flex; justify-content:space-between; align-items:center; padding:4px 0; border-bottom:1px solid #1a1a1a; font-size:0.7rem; }
+        .projection-val { font-size:1.4rem; font-weight:900; color:#00ff88; }
+
     </style>
 </head>
 <body>
@@ -799,6 +928,8 @@ DASHBOARD_HTML = """
         loadFilters();
         refreshData();
         setInterval(refreshData, 30000);
+        loadInsights();
+        setInterval(loadInsights, 60000);
     }
 
     async function loadFilters() {
@@ -903,6 +1034,7 @@ DASHBOARD_HTML = """
 
         // Store globally for overlay access
         globalTotals = { ...t };
+        updateProjection(globalTotals, data.length);
 
         const rivals = {};
         PARTIES.filter(p => p !== 'ACCORD').forEach(p => rivals[p] = t[p]);
@@ -1168,10 +1300,192 @@ document.addEventListener("DOMContentLoaded", function() {
 
 document.addEventListener("keydown", function(e) {
     if (e.key === "Escape") {
-        ["ov-bar","ov-pie","ov-map","ov-feed","ov-margin","ov-ai","ov-ec8e","ov-kpi"].forEach(function(id){ closeOverlay(id); });
+        ["ov-bar","ov-pie","ov-map","ov-feed","ov-margin","ov-ai","ov-ec8e","ov-kpi","ov-lga","ov-swing","ov-flags","ov-proj","ov-timeline"].forEach(function(id){ closeOverlay(id); });
         document.getElementById("ec8eLightbox").style.display = "none";
     }
 });
+
+
+// ── INSIGHT LOADERS ───────────────────────────────────────────────────────────
+
+async function loadInsights() {
+    loadLGACompletion();
+    loadSwingPUs();
+    loadIntegrityFlags();
+    loadAgentLeaderboard();
+    loadCollationTimeline();
+}
+
+async function loadLGACompletion() {
+    try {
+        const res = await fetch(window.location.origin + '/api/lga_completion');
+        const data = await res.json();
+        const el = document.getElementById('lgaCompletionList');
+        const ovEl = document.getElementById('ov-lga-inner');
+
+        // threshold: count LGAs where ACCORD >= 25% from live globalData
+        const lgaMap = {};
+        globalData.forEach(d => {
+            const lga = (d.lga || '').toUpperCase();
+            if (!lgaMap[lga]) lgaMap[lga] = { accord: 0, total: 0 };
+            lgaMap[lga].accord += d.votes_party_ACCORD || 0;
+            ['ACCORD','AA','AAC','ADC','ADP','APGA','APC','APM','APP','BP','NNPP','PRP','YPP','ZLP']
+              .forEach(p => { lgaMap[lga].total += d['votes_party_' + p] || 0; });
+        });
+        let qualified = 0;
+        Object.values(lgaMap).forEach(v => { if (v.total > 0 && (v.accord/v.total) >= 0.25) qualified++; });
+        const tf = document.getElementById('thresholdFill');
+        const tl = document.getElementById('thresholdLGAs');
+        if (tf) tf.style.width = Math.min((qualified/20)*100, 100) + '%';
+        if (tl) tl.textContent = qualified;
+
+        // PU count + turnout
+        const pr = document.getElementById('puReported');
+        if (pr) pr.textContent = globalData.length;
+        let tSum = 0, tCnt = 0;
+        globalData.forEach(d => {
+            if (d.reg_voters > 0 && d.total_accredited > 0) {
+                tSum += (d.total_accredited / d.reg_voters) * 100; tCnt++;
+            }
+        });
+        const ta = document.getElementById('turnoutAvg');
+        if (ta) ta.textContent = tCnt > 0 ? (tSum/tCnt).toFixed(1) + '%' : '--%';
+
+        if (!data.length) { if(el) el.innerHTML = '<div style="color:#555;font-size:0.7rem;">No data</div>'; return; }
+        const rowHtml = items => items.map(d =>
+            '<div class="lga-row">' +
+            '<div class="lga-name">' + d.lga + '</div>' +
+            '<div class="lga-bar-wrap"><div class="lga-bar-fill" style="width:' + Math.min(d.pct,100) + '%"></div></div>' +
+            '<div class="lga-pct">' + d.pct + '%</div>' +
+            '<div style="font-size:0.6rem;color:#555;margin-left:4px;">' + d.submitted + '/' + d.total + '</div>' +
+            '</div>').join('');
+        if (el) el.innerHTML = rowHtml(data.slice(0,10));
+        if (ovEl) ovEl.innerHTML = rowHtml(data);
+    } catch(e) { console.error('LGA err', e); }
+}
+
+async function loadSwingPUs() {
+    try {
+        const res = await fetch(window.location.origin + '/api/swing_pus');
+        const data = await res.json();
+        const el = document.getElementById('swingList');
+        const ovEl = document.getElementById('ov-swing-inner');
+        const cnt = document.getElementById('swingCount');
+        if (cnt) cnt.textContent = data.length;
+        if (!data.length) { if(el) el.innerHTML = '<div style="color:#00ff88;font-size:0.7rem;">No swing PUs</div>'; return; }
+        const render = items => items.map(d =>
+            '<div class="swing-item ' + (d.margin >= 0 ? 'lead' : '') + '">' +
+            '<div style="font-weight:bold;color:' + (d.margin>=0?'#ffc107':'#ff4444') + '">' + d.pu_name + '</div>' +
+            '<div style="color:#aaa;">' + d.lga + ' / ' + d.ward + '</div>' +
+            '<div>ACCORD <b>' + d.accord + '</b> vs ' + d.rival + ' <b>' + d.rival_votes + '</b> | margin: <b style="color:' + (d.margin>=0?'#00ff88':'#ff4444') + '">' + (d.margin>0?'+':'') + d.margin + '</b></div>' +
+            '</div>').join('');
+        if (el) el.innerHTML = render(data.slice(0,4));
+        if (ovEl) ovEl.innerHTML = render(data);
+    } catch(e) {}
+}
+
+async function loadIntegrityFlags() {
+    try {
+        const res = await fetch(window.location.origin + '/api/integrity_flags');
+        const data = await res.json();
+        const el = document.getElementById('flagList');
+        const ovEl = document.getElementById('ov-flags-inner');
+        const cnt = document.getElementById('flagCount');
+        if (cnt) cnt.textContent = data.length;
+        if (!data.length) {
+            const ok = '<div style="color:#00ff88;font-size:0.7rem;">All clear</div>';
+            if(el) el.innerHTML = ok; if(ovEl) ovEl.innerHTML = ok; return;
+        }
+        const render = items => items.map(d =>
+            '<div class="flag-item ' + d.severity + '">' +
+            '<div style="font-weight:bold;color:#ff6600;">' + d.pu_name + '</div>' +
+            '<div style="color:#aaa;font-size:0.65rem;">' + d.lga + ' / ' + d.ward + '</div>' +
+            d.issues.map(i => '<div style="color:#ffaa44;">' + i + '</div>').join('') +
+            '</div>').join('');
+        if (el) el.innerHTML = render(data.slice(0,3));
+        if (ovEl) ovEl.innerHTML = render(data);
+    } catch(e) {}
+}
+
+async function loadAgentLeaderboard() {
+    try {
+        const res = await fetch(window.location.origin + '/api/agent_leaderboard');
+        const data = await res.json();
+        const el = document.getElementById('agentList');
+        const ovEl = document.getElementById('ov-agentList');
+        if (!data.length) { if(el) el.innerHTML = '<div style="color:#555;font-size:0.7rem;">No data</div>'; return; }
+        const render = items => items.map((d,i) =>
+            '<div class="agent-row">' +
+            '<span style="color:' + (i===0?'#ffc107':i===1?'#aaa':i===2?'#cd7f32':'#555') + '">' +
+            (i===0?'1st':i===1?'2nd':i===2?'3rd':'#'+(i+1)) + ' ' + d.officer_id + '</span>' +
+            '<span style="color:#ffc107;font-weight:bold;">' + d.submissions + ' PU' + (d.submissions>1?'s':'') + '</span>' +
+            '</div>').join('');
+        if (el) el.innerHTML = render(data.slice(0,5));
+        if (ovEl) ovEl.innerHTML = render(data);
+    } catch(e) {}
+}
+
+async function loadCollationTimeline() {
+    try {
+        const res = await fetch(window.location.origin + '/api/collation_timeline');
+        const data = await res.json();
+        const statusEl = document.getElementById('timelineStatus');
+        const listEl = document.getElementById('ov-timeline-list');
+        if (!data.length) { if(statusEl) statusEl.textContent = 'No submissions'; return; }
+        const first = data[0].timestamp ? new Date(data[0].timestamp) : null;
+        if (statusEl && first) statusEl.textContent = first.toLocaleTimeString('en-NG',{hour:'2-digit',minute:'2-digit'});
+        if (listEl) {
+            listEl.innerHTML = data.map(d => {
+                const t = d.timestamp ? new Date(d.timestamp).toLocaleString('en-NG',{hour:'2-digit',minute:'2-digit',day:'numeric',month:'short'}) : '--';
+                return '<div style="display:flex;gap:8px;padding:4px 0;border-bottom:1px solid #1a1a1a;font-size:0.72rem;">' +
+                       '<span class="timeline-dot"></span><span style="color:#aaa;width:120px;">' + t + '</span>' +
+                       '<span style="color:#fff;">' + d.pu_name + '</span>' +
+                       '<span style="color:#555;margin-left:auto;">' + d.lga + '</span></div>';
+            }).join('');
+        }
+        const hourMap = {};
+        data.forEach(d => {
+            if (!d.timestamp) return;
+            const h = new Date(d.timestamp).getHours() + ':00';
+            hourMap[h] = (hourMap[h] || 0) + 1;
+        });
+        const labels = Object.keys(hourMap).sort();
+        const vals = labels.map(l => hourMap[l]);
+        const cvs = document.getElementById('ov-timelineChart');
+        if (cvs) {
+            if (window._tlChart) window._tlChart.destroy();
+            window._tlChart = new Chart(cvs, {
+                type: 'bar',
+                data: { labels, datasets: [{ label: 'Submissions', data: vals, backgroundColor: '#ffc107' }] },
+                options: {
+                    maintainAspectRatio: false,
+                    plugins: { legend: { display: false }, datalabels: { color: '#fff', anchor: 'end', align: 'top' } },
+                    scales: { y: { beginAtZero: true, ticks: { color: '#fff', stepSize: 1 }, grid: { color: '#222' } }, x: { ticks: { color: '#fff' } } }
+                }
+            });
+        }
+    } catch(e) {}
+}
+
+function updateProjection(totals, reportedPUs) {
+    const TOTAL_PUS = 3763;
+    const accord = totals.ACCORD || 0;
+    const totalVotes = Object.values(totals).reduce((a,b) => a+b, 0);
+    const pv = document.getElementById('projectionVal');
+    const pn = document.getElementById('projectionNote');
+    const opv = document.getElementById('ov-projVal');
+    const opn = document.getElementById('ov-projNote');
+    if (reportedPUs > 0 && totalVotes > 0) {
+        const share = accord / totalVotes;
+        const avgPerPU = totalVotes / reportedPUs;
+        const projected = Math.round(share * avgPerPU * TOTAL_PUS);
+        const pct = ((reportedPUs / TOTAL_PUS) * 100).toFixed(1);
+        const txt = projected.toLocaleString();
+        const note = pct + '% of PUs reported (' + reportedPUs + '/' + TOTAL_PUS + ')';
+        if(pv) pv.textContent = txt; if(pn) pn.textContent = note;
+        if(opv) opv.textContent = txt; if(opn) opn.textContent = note;
+    } else { if(pv) pv.textContent = '--'; }
+}
 
 </script>
 
@@ -1195,6 +1509,87 @@ document.addEventListener("keydown", function(e) {
 </div></div>
 
 
+
+
+<!-- INSIGHT ROW -->
+<div id="insightRow" style="display:grid;grid-template-columns:1fr 1fr 1fr 1fr;gap:8px;padding:0 10px 10px;">
+  <div class="insight-card" style="overflow-y:auto;max-height:200px;">
+    <div class="insight-title">LGA COMPLETION <button class="ov-btn" style="float:right;" onclick="openOverlay('ov-lga')">+</button></div>
+    <div id="lgaCompletionList"><div style="color:#555;font-size:0.7rem;">Loading...</div></div>
+  </div>
+  <div class="insight-card" style="overflow-y:auto;max-height:200px;">
+    <div class="insight-title">SWING PUs <span id="swingCount" class="badge bg-danger ms-1" style="font-size:0.6rem;">0</span> <button class="ov-btn" style="float:right;" onclick="openOverlay('ov-swing')">+</button></div>
+    <div id="swingList"><div style="color:#555;font-size:0.7rem;">Loading...</div></div>
+  </div>
+  <div class="insight-card" style="overflow-y:auto;max-height:200px;">
+    <div class="insight-title">INTEGRITY FLAGS <span id="flagCount" class="badge bg-warning text-dark ms-1" style="font-size:0.6rem;">0</span> <button class="ov-btn" style="float:right;" onclick="openOverlay('ov-flags')">+</button></div>
+    <div id="flagList"><div style="color:#555;font-size:0.7rem;">Loading...</div></div>
+  </div>
+  <div class="insight-card" style="overflow-y:auto;max-height:200px;">
+    <div class="insight-title">PROJECTION &amp; AGENTS <button class="ov-btn" style="float:right;" onclick="openOverlay('ov-proj')">+</button></div>
+    <div style="margin-bottom:6px;">
+      <div style="font-size:0.6rem;color:#aaa;">PROJECTED FINAL (ACCORD)</div>
+      <div id="projectionVal" class="projection-val">--</div>
+      <div id="projectionNote" style="font-size:0.6rem;color:#555;">Based on current % x 3,763 PUs</div>
+    </div>
+    <div style="font-size:0.6rem;color:#ffc107;font-weight:bold;margin-bottom:4px;">AGENT LEADERBOARD</div>
+    <div id="agentList"><div style="color:#555;font-size:0.7rem;">Loading...</div></div>
+  </div>
+</div>
+
+<!-- THRESHOLD TRACKER -->
+<div style="padding:0 10px 8px;">
+  <div class="insight-card">
+    <div class="insight-title">WINNING THRESHOLD -- 25% IN 20+ LGAs + HIGHEST TOTAL <button class="ov-btn" style="float:right;" onclick="openOverlay('ov-timeline')">Timeline</button></div>
+    <div style="display:flex;gap:20px;align-items:center;flex-wrap:wrap;">
+      <div style="flex:1;min-width:200px;">
+        <div style="font-size:0.65rem;color:#aaa;margin-bottom:3px;">LGAs WITH ACCORD &gt;=25% SHARE</div>
+        <div class="threshold-bar" style="height:12px;"><div id="thresholdFill" class="threshold-fill" style="width:0%"></div></div>
+        <div style="font-size:0.7rem;margin-top:3px;"><span id="thresholdLGAs" style="color:#ffc107;font-weight:bold;">0</span><span style="color:#555;"> / 30 LGAs (need 20)</span></div>
+      </div>
+      <div style="text-align:center;">
+        <div style="font-size:0.6rem;color:#aaa;">TURNOUT AVG</div>
+        <div id="turnoutAvg" style="font-size:1.1rem;font-weight:900;color:#0dcaf0;">--%</div>
+      </div>
+      <div style="text-align:center;">
+        <div style="font-size:0.6rem;color:#aaa;">FIRST SUBMISSION</div>
+        <div id="timelineStatus" style="font-size:0.75rem;color:#aaa;">--</div>
+      </div>
+      <div style="text-align:center;">
+        <div style="font-size:0.6rem;color:#aaa;">PUs REPORTED</div>
+        <div id="puReported" style="font-size:1.1rem;font-weight:900;color:#ffc107;">0</div>
+        <div style="font-size:0.6rem;color:#555;">of 3,763 total</div>
+      </div>
+    </div>
+  </div>
+</div>
+
+<!-- NEW OVERLAYS -->
+<div id="ov-lga" class="ov-overlay"><div class="ov-inner"><button class="ov-close" onclick="closeOverlay('ov-lga')">X</button>
+  <h5 style="color:#ffc107">LGA COMPLETION</h5><div id="ov-lga-inner" style="max-height:75vh;overflow-y:auto;"></div>
+</div></div>
+<div id="ov-swing" class="ov-overlay"><div class="ov-inner"><button class="ov-close" onclick="closeOverlay('ov-swing')">X</button>
+  <h5 style="color:#ff4444">SWING POLLING UNITS</h5><div id="ov-swing-inner" style="max-height:75vh;overflow-y:auto;"></div>
+</div></div>
+<div id="ov-flags" class="ov-overlay"><div class="ov-inner"><button class="ov-close" onclick="closeOverlay('ov-flags')">X</button>
+  <h5 style="color:#ff6600">RESULT INTEGRITY FLAGS</h5><div id="ov-flags-inner" style="max-height:75vh;overflow-y:auto;"></div>
+</div></div>
+<div id="ov-proj" class="ov-overlay"><div class="ov-inner"><button class="ov-close" onclick="closeOverlay('ov-proj')">X</button>
+  <h5 style="color:#00ff88">PROJECTED TALLY + AGENTS</h5>
+  <div style="display:grid;grid-template-columns:1fr 1fr;gap:20px;">
+    <div>
+      <div style="font-size:0.75rem;color:#aaa;margin-bottom:8px;">PROJECTED ACCORD TOTAL</div>
+      <div id="ov-projVal" style="font-size:3rem;font-weight:900;color:#00ff88;">--</div>
+      <div id="ov-projNote" style="font-size:0.75rem;color:#555;margin-top:4px;"></div>
+    </div>
+    <div><div style="font-size:0.75rem;color:#ffc107;font-weight:bold;margin-bottom:8px;">AGENT LEADERBOARD</div><div id="ov-agentList"></div></div>
+  </div>
+</div></div>
+<div id="ov-timeline" class="ov-overlay"><div class="ov-inner"><button class="ov-close" onclick="closeOverlay('ov-timeline')">X</button>
+  <h5 style="color:#ffc107">COLLATION TIMELINE</h5>
+  <div style="position:relative;height:320px;"><canvas id="ov-timelineChart"></canvas></div>
+  <div id="ov-timeline-list" style="max-height:200px;overflow-y:auto;margin-top:12px;"></div>
+</div></div>
 
 </body>
 </html>"
