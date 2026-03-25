@@ -14,6 +14,56 @@ from fastapi.staticfiles import StaticFiles
 import cloudinary
 import cloudinary.uploader
 
+# --- WHATSAPP ALERT ---
+import threading
+
+def send_whatsapp_alert(payload: dict):
+    """Fire-and-forget WhatsApp alert via Twilio sandbox."""
+    try:
+        from twilio.rest import Client
+        account_sid = os.environ.get("TWILIO_ACCOUNT_SID", "")
+        auth_token  = os.environ.get("TWILIO_AUTH_TOKEN", "")
+        from_number = os.environ.get("TWILIO_WHATSAPP_FROM", "+14155238886")
+        to_number   = "whatsapp:+2349160420100"
+
+        if not account_sid or not auth_token:
+            logger.warning("Twilio credentials not set — WhatsApp alert skipped.")
+            return
+
+        votes = payload.get("votes", {})
+        accord_votes = votes.get("ACCORD", 0)
+        top_rivals = sorted(
+            [(p, v) for p, v in votes.items() if p != "ACCORD" and v > 0],
+            key=lambda x: -x[1]
+        )[:3]
+        rival_str = ", ".join([f"{p}: {v}" for p, v in top_rivals]) or "None"
+
+        msg = (
+            f"🗳 *NEW PU SUBMISSION*\n"
+            f"━━━━━━━━━━━━━━━━━━\n"
+            f"📍 *PU:* {payload.get('location', 'N/A')}\n"
+            f"🏛 *Ward:* {payload.get('ward', 'N/A')} | *LGA:* {payload.get('lg', 'N/A')}\n"
+            f"🔑 *PU Code:* {payload.get('pu_code', 'N/A')}\n"
+            f"👤 *Officer:* {payload.get('officer_id', 'N/A')}\n"
+            f"━━━━━━━━━━━━━━━━━━\n"
+            f"✅ *ACCORD:* {accord_votes}\n"
+            f"🔴 *Rivals:* {rival_str}\n"
+            f"📊 *Total Cast:* {payload.get('total_cast', 0)} | *Accredited:* {payload.get('total_accredited', 0)}\n"
+            f"━━━━━━━━━━━━━━━━━━\n"
+            f"🕐 {payload.get('timestamp', '')}\n"
+            f"_Powered by Popson Geospatial Services_"
+        )
+
+        client = Client(account_sid, auth_token)
+        client.messages.create(
+            from_=f"whatsapp:{from_number}",
+            to=to_number,
+            body=msg
+        )
+        logger.info(f"✅ WhatsApp alert sent for PU: {payload.get('pu_code')}")
+    except Exception as e:
+        logger.error(f"WhatsApp alert failed: {e}")
+
 # --- CONFIGURATION ---
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
@@ -209,6 +259,9 @@ async def submit(
                     datetime.now().isoformat(), votes_json, ec8e_filename
                 ))
                 conn.commit()
+        # Fire WhatsApp alert in background (non-blocking)
+        alert_payload = {**payload, "timestamp": datetime.now().strftime("%d %b %Y %H:%M")}
+        threading.Thread(target=send_whatsapp_alert, args=(alert_payload,), daemon=True).start()
         return {"status": "success", "message": "Result Uploaded Successfully"}
     except psycopg2.IntegrityError:
         return {"status": "error", "message": "REJECTED: A submission for this Polling Unit already exists."}
