@@ -286,23 +286,101 @@ def get_dash_filters():
 
 @app.get("/export/csv")
 async def export_csv():
+    import openpyxl
+    from openpyxl.styles import PatternFill, Font, Alignment, Border, Side
+    from openpyxl.utils import get_column_letter
+    from fastapi.responses import Response as _Resp
+    import io as _io
+    from datetime import datetime as _dt
+
     with get_db() as conn:
         with conn.cursor() as cur:
-            cur.execute("SELECT * FROM field_submissions WHERE state = 'osun' ORDER BY timestamp DESC")
+            cur.execute("SELECT * FROM field_submissions ORDER BY timestamp DESC")
             rows = cur.fetchall()
-            output = io.StringIO()
-            writer = csv.writer(output)
-            parties = ["ACCORD", "AA", "AAC", "ADC", "ADP", "APGA", "APC", "APM", "APP", "BP", "NNPP", "PRP", "YPP", "ZLP"]
-            header = ["Timestamp", "Officer ID", "State", "LGA", "Ward", "PU Code", "Location", "Accredited", "Total Cast"] + parties
-            writer.writerow(header)
-            for r in rows:
-                v = json.loads(r['votes_json']) if isinstance(r['votes_json'], str) else r['votes_json']
-                row_data = [r['timestamp'], r['officer_id'], r['state'], r['lg'], r['ward'], r['pu_code'], r['location'], r['total_accredited'], r['total_cast']]
-                for p in parties:
-                    row_data.append(v.get(p, 0))
-                writer.writerow(row_data)
-            output.seek(0)
-            return StreamingResponse(output, media_type="text/csv", headers={"Content-Disposition": "attachment; filename=election_audit_full.csv"})
+
+    PARTIES = ["ACCORD","AA","AAC","ADC","ADP","APGA","APC","APM","APP","BP","NNPP","PRP","YPP","ZLP"]
+    wb = openpyxl.Workbook()
+    ws = wb.active
+    ws.title = "Election Results"
+
+    GREEN="00008751"; GOLD="00FFC107"; DARK="00121212"; WHITE="00FFFFFF"
+    LIGHT_GREY="00F5F5F5"; ACCORD_LIGHT="00E8F5E9"
+    hdr_fill=PatternFill("solid",fgColor=GREEN)
+    hdr_font=Font(bold=True,color=WHITE,size=10,name="Calibri")
+    party_fill=PatternFill("solid",fgColor=GOLD)
+    party_font=Font(bold=True,color=DARK,size=10,name="Calibri")
+    accord_fill=PatternFill("solid",fgColor=ACCORD_LIGHT)
+    alt_fill=PatternFill("solid",fgColor=LIGHT_GREY)
+    center=Alignment(horizontal="center",vertical="center",wrap_text=True)
+    left_align=Alignment(horizontal="left",vertical="center")
+    ts=Side(style="thin",color="CCCCCC")
+    tb=Border(left=ts,right=ts,top=ts,bottom=ts)
+
+    TOTAL_COLS=17+len(PARTIES)+1
+    ws.merge_cells(start_row=1,start_column=1,end_row=1,end_column=TOTAL_COLS)
+    tc=ws.cell(row=1,column=1,value="ACCORD PARTY - OSUN 2026 GOVERNORSHIP ELECTION RESULTS")
+    tc.fill=PatternFill("solid",fgColor=GREEN); tc.font=Font(bold=True,color=GOLD,size=14,name="Calibri")
+    tc.alignment=Alignment(horizontal="center",vertical="center"); ws.row_dimensions[1].height=30
+
+    ws.merge_cells(start_row=2,start_column=1,end_row=2,end_column=TOTAL_COLS)
+    sc=ws.cell(row=2,column=1,value=f"Exported: {_dt.now().strftime('%d %B %Y  %H:%M')}  |  Total PUs: {len(rows)}")
+    sc.fill=PatternFill("solid",fgColor=GOLD); sc.font=Font(bold=True,color=DARK,size=10,name="Calibri")
+    sc.alignment=Alignment(horizontal="center",vertical="center"); ws.row_dimensions[2].height=18
+
+    headers=["#","Officer ID","State","LGA","Ward","Ward Code","PU Code","Polling Unit",
+             "Reg. Voters","Accredited","Valid Votes","Rejected","Total Cast",
+             "Latitude","Longitude","Timestamp","EC8E",*PARTIES,"ACCORD TOTAL"]
+    for col,h in enumerate(headers,1):
+        cell=ws.cell(row=3,column=col,value=h)
+        ip=h in PARTIES or h=="ACCORD TOTAL"
+        cell.fill=party_fill if ip else hdr_fill
+        cell.font=party_font if ip else hdr_font
+        cell.alignment=center; cell.border=tb
+    ws.row_dimensions[3].height=22
+
+    for ri,r in enumerate(rows,4):
+        v=json.loads(r["votes_json"]) if isinstance(r["votes_json"],str) else (r["votes_json"] or {})
+        av=v.get("ACCORD",0); is_alt=(ri%2==0)
+        rf=accord_fill if av>0 else (alt_fill if is_alt else None)
+        row_data=[r["id"],r["officer_id"],(r["state"] or "").upper(),(r["lg"] or "").upper(),
+                  (r["ward"] or "").upper(),r["ward_code"],r["pu_code"],r["location"],
+                  r["reg_voters"],r["total_accredited"],r["valid_votes"],r["rejected_votes"],
+                  r["total_cast"],r["lat"],r["lon"],r["timestamp"],
+                  "YES" if r.get("ec8e_image") else "NO",
+                  *[v.get(p,0) for p in PARTIES],av]
+        for col,val in enumerate(row_data,1):
+            cell=ws.cell(row=ri,column=col,value=val)
+            cell.border=tb; cell.alignment=left_align if col==8 else center
+            if rf: cell.fill=rf
+            if col==len(headers): cell.font=Font(bold=True,color="00008751",size=10,name="Calibri")
+        ws.row_dimensions[ri].height=16
+
+    col_widths=[4,12,8,14,16,11,10,28,10,11,10,9,10,10,10,22,6]+[8]*len(PARTIES)+[12]
+    for i,w in enumerate(col_widths,1):
+        ws.column_dimensions[get_column_letter(i)].width=w
+    ws.freeze_panes="A4"
+    ws.auto_filter.ref=f"A3:{get_column_letter(TOTAL_COLS)}3"
+
+    ws2=wb.create_sheet("Party Summary")
+    ws2.merge_cells("A1:C1")
+    s2t=ws2.cell(row=1,column=1,value="PARTY VOTE SUMMARY")
+    s2t.fill=PatternFill("solid",fgColor=GREEN); s2t.font=Font(bold=True,color=GOLD,size=12,name="Calibri")
+    s2t.alignment=Alignment(horizontal="center",vertical="center"); ws2.row_dimensions[1].height=24
+    for col,h in enumerate(["Party","Total Votes","% Share"],1):
+        c=ws2.cell(row=2,column=col,value=h); c.fill=hdr_fill; c.font=hdr_font; c.alignment=center; c.border=tb
+    pt={p:sum((json.loads(r["votes_json"]) if isinstance(r["votes_json"],str) else (r["votes_json"] or {})).get(p,0) for r in rows) for p in PARTIES}
+    gt=sum(pt.values()) or 1
+    for ri2,(party,total) in enumerate(sorted(pt.items(),key=lambda x:-x[1]),3):
+        pct=round((total/gt)*100,2); ia=party=="ACCORD"
+        for col,val in enumerate([party,total,f"{pct}%"],1):
+            c=ws2.cell(row=ri2,column=col,value=val); c.border=tb; c.alignment=center
+            if ia: c.fill=PatternFill("solid",fgColor=ACCORD_LIGHT); c.font=Font(bold=True,color="00008751",size=10,name="Calibri")
+    ws2.column_dimensions["A"].width=12; ws2.column_dimensions["B"].width=14; ws2.column_dimensions["C"].width=10
+
+    buf=_io.BytesIO(); wb.save(buf); buf.seek(0)
+    return _Resp(content=buf.read(),
+        media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+        headers={"Content-Disposition":"attachment; filename=Accord_Osun2026_Results.xlsx"})
 
 @app.get("/submissions")
 async def get_dashboard_data():
@@ -443,6 +521,7 @@ async def index():
                     </div>
                 </div>
             </div>
+            <div id="submitError" class="alert alert-danger d-none small py-2 mb-2 fw-bold" style="border-radius:8px;"></div>
             <button class="btn btn-success btn-lg w-100 py-3 fw-bold" onclick="reviewSubmission()">UPLOAD PU RESULT</button>
         </div>
     </div>
