@@ -24,7 +24,7 @@ def send_whatsapp_alert(payload: dict):
         account_sid = os.environ.get("TWILIO_ACCOUNT_SID", "")
         auth_token  = os.environ.get("TWILIO_AUTH_TOKEN", "")
         from_number = os.environ.get("TWILIO_WHATSAPP_FROM", "+14155238886")
-        to_number   = "whatsapp:+2349160420100"
+        to_number   = "whatsapp:+2349039587686"
 
         if not account_sid or not auth_token:
             logger.warning("Twilio credentials not set — WhatsApp alert skipped.")
