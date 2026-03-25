@@ -555,7 +555,7 @@ async def index():
     </div>
     <div class="container pb-2" style="max-width: 850px;">
     <div style="text-align:center;padding:20px 0 10px;border-top:1px solid rgba(255,255,255,0.12);margin-top:30px;">
-        <img src="https://api.app.obvious.ai/prepare/files/link/fl_MzLcdefs/popson-geospatial-logo.png" style="height:30px;object-fit:contain;vertical-align:middle;margin-right:10px;opacity:0.9;">
+        <img src="/static/logos/popson-logo.png" style="height:30px;object-fit:contain;vertical-align:middle;margin-right:10px;opacity:0.9;">
         <span style="color:rgba(255,255,255,0.55);font-size:0.75rem;vertical-align:middle;">Powered by <strong style="color:#fff;">Popson Geospatial Services</strong></span>
     </div>
     </div>
@@ -1683,7 +1683,7 @@ function updateProjection(totals, reportedPUs) {
 
 
         <div style="text-align:center;padding:7px 0;border-top:1px solid #1c1c1c;background:#0a0a0a;grid-column:1/-1;">
-            <img src="https://api.app.obvious.ai/prepare/files/link/fl_MzLcdefs/popson-geospatial-logo.png" style="height:22px;object-fit:contain;vertical-align:middle;margin-right:8px;opacity:0.8;">
+            <img src="/static/logos/popson-logo.png" style="height:22px;object-fit:contain;vertical-align:middle;margin-right:8px;opacity:0.8;">
             <span style="color:#444;font-size:0.68rem;vertical-align:middle;">Powered by <strong style="color:#666;">Popson Geospatial Services</strong></span>
         </div>
 </body>
