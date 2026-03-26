@@ -152,9 +152,10 @@ def validate_officer(officer_id: str):
         with get_db() as conn:
             with conn.cursor() as cur:
                 cur.execute(
-                    """SELECT ward, lg, location, pu_code, ward_code
+                    """SELECT ward, lg, location, pu_code, ward_code, state
                        FROM polling_units
-                       WHERE state = 'osun' AND ward_code = %s AND pu_code = %s""",
+                       WHERE ward_code = %s AND pu_code = %s
+                       LIMIT 1""",
                     (ward_code, pu_code)
                 )
                 row = cur.fetchone()
