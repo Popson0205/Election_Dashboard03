@@ -492,135 +492,324 @@ async def serve_ec8e(filename: str):
 async def index():
     parties = ["ACCORD", "AA", "AAC", "ADC", "ADP", "APGA", "APC", "APM", "APP", "BP", "NNPP", "PRP", "YPP", "ZLP"]
     party_cards = "".join([f'''
-        <div class="col-4 col-md-2 mb-2">
-            <div class="p-2 border rounded text-center bg-white shadow-sm">
-                <img src="/logos/{p}.png" onerror="this.src='https://via.placeholder.com/30?text={p}'" style="height:30px">
-                <small class="d-block fw-bold">{p}</small>
-                <input type="number" class="form-control form-control-sm party-v text-center" data-p="{p}" value="0" oninput="calculateTotals()">
+        <div class="col-4 col-sm-3 mb-2">
+            <div class="party-card text-center">
+                <img src="/logos/{p}.png" onerror="this.src='https://via.placeholder.com/28?text={p}'" style="height:28px;object-fit:contain;">
+                <small class="d-block fw-bold mt-1" style="font-size:0.7rem;">{p}</small>
+                <input type="number" class="form-control form-control-sm party-v text-center mt-1" data-p="{p}" value="0" min="0" inputmode="numeric" oninput="calculateTotals()">
             </div>
         </div>''' for p in parties])
 
     return f"""
 <!DOCTYPE html>
-<html>
+<html lang="en">
 <head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+    <meta name="mobile-web-app-capable" content="yes">
+    <meta name="apple-mobile-web-app-capable" content="yes">
+    <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+    <meta name="theme-color" content="#008751">
     <title>IMOLE YOUTH ACCORD MOBILIZATION</title>
     <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/css/bootstrap.min.css" rel="stylesheet">
     <style>
-        body {{ background: linear-gradient(rgba(0,0,0,0.6), rgba(0,0,0,0.6)), url('/static/bg.png'); background-size: cover; background-position: center; background-attachment: fixed; min-height: 100vh; margin: 0; }}
-        .navbar {{ background: rgba(0, 135, 81, 0.9) !important; backdrop-filter: blur(10px); color: white; border-bottom: 4px solid #ffc107; }}
-        .card {{ background: rgba(255, 255, 255, 0.95) !important; border-radius: 12px; border: none; box-shadow: 0 10px 30px rgba(0,0,0,0.3) !important; margin-bottom: 20px; color: #222; }}
-        .section-label {{ font-size: 0.75rem; font-weight: bold; color: #008751; text-transform: uppercase; border-left: 3px solid #ffc107; padding-left: 10px; margin-bottom: 15px; display: block; }}
-        input[readonly] {{ background-color: #e9ecef !important; font-weight: bold; }}
-        #loginArea {{ margin-top: 100px; }}
+        * {{ box-sizing: border-box; }}
+        body {{
+            background: linear-gradient(rgba(0,0,0,0.65), rgba(0,0,0,0.65)), url('/static/bg.png');
+            background-size: cover; background-position: center; background-attachment: fixed;
+            min-height: 100vh; margin: 0; font-family: 'Segoe UI', sans-serif;
+            -webkit-tap-highlight-color: transparent;
+        }}
+        .navbar-top {{
+            background: rgba(0,135,81,0.95);
+            backdrop-filter: blur(10px);
+            border-bottom: 3px solid #ffc107;
+            padding: 10px 16px;
+            position: sticky; top: 0; z-index: 100;
+            display: flex; align-items: center; justify-content: center;
+        }}
+        .navbar-top h6 {{
+            color: #fff; margin: 0; font-size: 0.78rem;
+            font-weight: 700; letter-spacing: 0.5px; text-align: center; text-transform: uppercase;
+        }}
+        .main-wrap {{ padding: 16px; max-width: 560px; margin: 0 auto; padding-bottom: 40px; }}
+        .card {{
+            background: rgba(255,255,255,0.97) !important;
+            border-radius: 14px; border: none;
+            box-shadow: 0 8px 24px rgba(0,0,0,0.25) !important;
+            margin-bottom: 16px; color: #222; overflow: hidden;
+        }}
+        .card-body {{ padding: 16px; }}
+        .section-label {{
+            font-size: 0.7rem; font-weight: 800; color: #008751;
+            text-transform: uppercase; border-left: 3px solid #ffc107;
+            padding-left: 10px; margin-bottom: 14px; display: block; letter-spacing: 0.5px;
+        }}
+        /* Large touch targets for mobile */
+        .form-control, .form-select {{
+            font-size: 1rem !important;
+            min-height: 48px !important;
+            border-radius: 10px !important;
+            border: 1.5px solid #dee2e6;
+        }}
+        .form-control:focus, .form-select:focus {{
+            border-color: #008751; box-shadow: 0 0 0 3px rgba(0,135,81,0.15);
+        }}
+        input[readonly] {{ background-color: #f0f4f0 !important; font-weight: 600; color: #333; }}
+        .party-card {{
+            background: #f8f9fa; border: 1.5px solid #e9ecef;
+            border-radius: 10px; padding: 8px 4px;
+            transition: border-color 0.2s;
+        }}
+        .party-card:has(input:not([value="0"])) {{ border-color: #008751; background: #f0fff4; }}
+        .party-card input {{
+            font-size: 1rem !important; font-weight: 700;
+            min-height: 40px !important; padding: 4px !important;
+            border-radius: 8px !important;
+        }}
+        /* Big green submit button */
+        .btn-submit {{
+            background: linear-gradient(135deg, #008751, #00a060);
+            color: #fff; border: none; border-radius: 14px;
+            font-size: 1.1rem; font-weight: 800;
+            padding: 16px; width: 100%;
+            box-shadow: 0 4px 16px rgba(0,135,81,0.4);
+            letter-spacing: 1px; text-transform: uppercase;
+            min-height: 56px;
+        }}
+        .btn-submit:active {{ transform: scale(0.98); }}
+        .btn-gps {{
+            background: #fff; border: 2px solid #333; color: #333;
+            border-radius: 12px; padding: 12px; width: 100%;
+            font-size: 0.9rem; font-weight: 600; min-height: 50px;
+        }}
+        .btn-gps.fixed {{ border-color: #008751; color: #008751; background: #f0fff4; }}
+        .audit-badge {{
+            border-radius: 10px; padding: 10px 14px;
+            font-size: 0.8rem; font-weight: 700; text-align: center;
+        }}
+        /* Login screen */
+        #loginArea {{
+            margin-top: 60px;
+            max-width: 380px; margin-left: auto; margin-right: auto;
+        }}
+        #loginArea .card-body {{ padding: 28px 24px; }}
+        #loginArea h5 {{
+            color: #008751; font-weight: 800; margin-bottom: 20px; font-size: 1.1rem;
+        }}
+        .login-icon {{ font-size: 2.5rem; margin-bottom: 12px; }}
+        /* Modal tweaks for mobile */
+        .modal-content {{
+            background: #1a1a1a; color: #fff;
+            border: 1px solid #ffc107; border-radius: 16px;
+        }}
+        .modal-header {{ border-bottom: 1px solid #333; padding: 14px 16px; }}
+        .modal-body {{ padding: 14px 16px; }}
+        .modal-footer {{ border-top: 1px solid #333; padding: 12px 16px; }}
+        /* Scrollable modal on small screens */
+        .modal-dialog {{ margin: 8px; }}
+        .modal-dialog-scrollable .modal-body {{ max-height: 55vh; overflow-y: auto; }}
+        /* EC8E upload */
+        .ec8e-upload-area {{
+            border: 2px dashed #dee2e6; border-radius: 12px;
+            padding: 20px; text-align: center; cursor: pointer;
+            background: #fafafa; transition: border-color 0.2s;
+        }}
+        .ec8e-upload-area:active {{ border-color: #008751; background: #f0fff4; }}
+        /* Powered by footer */
+        .powered-by {{
+            text-align: center; padding: 20px 0 10px;
+            border-top: 1px solid rgba(255,255,255,0.12); margin-top: 10px;
+        }}
     </style>
 </head>
 <body>
-    <nav class="navbar py-2 mb-4 text-center"><h5>IMOLE YOUTH ACCORD MOBILIZATION OFFICIAL FIELD COLLATION</h5></nav>
-    <div class="container pb-5" style="max-width: 850px;">
-        <div id="loginArea" class="card p-5 text-center mx-auto" style="max-width: 400px;">
-            <h6>Enter Officer ID</h6>
-            <input type="text" id="oid" class="form-control mb-3 text-center" placeholder="WARDCODE-PUCODE">
-            <!-- BUG FIX #1: Added missing loginError div -->
-            <div id="loginError" class="alert alert-danger d-none small py-2 mb-2"></div>
-            <button class="btn btn-success w-100" onclick="start()">Validate Access</button>
+    <div class="navbar-top">
+        <h6>⚡ IMOLE YOUTH ACCORD — FIELD COLLATION</h6>
+    </div>
+
+    <div class="main-wrap">
+
+        <!-- LOGIN -->
+        <div id="loginArea">
+            <div class="card">
+                <div class="card-body text-center">
+                    <div class="login-icon">🗳️</div>
+                    <h5>OFFICER LOGIN</h5>
+                    <p class="text-muted small mb-3">Enter your Officer ID to access the result form</p>
+                    <input type="text" id="oid" class="form-control mb-3 text-center fw-bold"
+                        placeholder="WARDCODE-PUCODE" autocomplete="off"
+                        autocapitalize="characters" style="letter-spacing:2px;font-size:1.1rem;">
+                    <div id="loginError" class="alert alert-danger d-none small py-2 mb-3"></div>
+                    <button class="btn-submit" onclick="start()">✅ VALIDATE ACCESS</button>
+                </div>
+            </div>
         </div>
 
+        <!-- FORM -->
         <div id="formArea" class="d-none">
-            <div class="card p-4">
-                <span class="section-label">1. Polling Unit Selection</span>
-                <div class="row g-2">
-                    <div class="col-4"><select id="s" class="form-select" onchange="loadLGAs()"><option value="">STATE</option></select></div>
-                    <div class="col-4"><select id="l" class="form-select" onchange="loadWards()"><option value="">LGA</option></select></div>
-                    <div class="col-4"><select id="w" class="form-select" onchange="loadPUs()"><option value="">WARD</option></select></div>
-                    <div class="col-12 mt-2"><select id="p" class="form-select" onchange="fillPU()"><option value="">SELECT POLLING UNIT</option></select></div>
-                </div>
-                <div class="row mt-3 g-2">
-                    <div class="col-4"><small>Ward Code</small><input type="text" id="wc" class="form-control" readonly></div>
-                    <div class="col-4"><small>PU Code</small><input type="text" id="pc" class="form-control" readonly></div>
-                    <div class="col-4"><small>Location</small><input type="text" id="loc" class="form-control" readonly></div>
-                </div>
-            </div>
 
-            <div class="card p-4">
-                <span class="section-label">2. Official 14-Party Scorecard — 2026 Ọàsun Governorship</span>
-                <div class="row g-2">{party_cards}</div>
-            </div>
-
-            <div class="card p-4">
-                <span class="section-label">3. Accreditation & Audit</span>
-                <div class="row g-3">
-                    <div class="col-4"><label class="small">Registered</label><input type="number" id="rv" class="form-control" value="0"></div>
-                    <div class="col-4"><label class="small">Accredited</label><input type="number" id="ta" class="form-control" oninput="calculateTotals()"></div>
-                    <div class="col-4"><label class="small">Rejected</label><input type="number" id="rj" class="form-control" value="0" oninput="calculateTotals()"></div>
-                    <div class="col-6"><label class="small text-success">Valid</label><input type="number" id="vv" class="form-control" readonly></div>
-                    <div class="col-6"><label class="small text-primary">Total Cast</label><input type="number" id="tc" class="form-control" readonly></div>
-                </div>
-                <div id="auditStatus" class="mt-3 p-2 rounded text-center d-none small fw-bold"></div>
-            </div>
-
-            <!-- BUG FIX #5: GPS no longer hard-blocks — shows warning but allows submission -->
-            <button class="btn btn-outline-dark w-100 mb-2" onclick="getGPS()">
-                <span id="gpsLabel">📍 Fix GPS Location (Recommended)</span>
-            </button>
-            <div id="gpsWarning" class="alert alert-warning d-none small py-2 mb-2">
-                ⚠️ GPS not captured. You can still submit, but location will not be recorded.
-            </div>
-
-            <div class="card mb-3">
-                <div class="card-body p-3">
-                    <span class="section-label">4. EC 8E FORM IMAGE UPLOAD</span>
-                    <div class="mt-2">
-                        <label class="form-label small text-muted mb-1">Attach a clear photo of the signed EC 8E form (optional)</label>
-                        <input type="file" id="ec8eFile" accept="image/*" capture="environment" class="form-control form-control-sm bg-dark text-white border-secondary">
-                        <div id="ec8ePreview" class="mt-2 text-center d-none">
-                            <img id="ec8eImg" src="#" alt="EC8E Preview" style="max-width:100%;max-height:200px;border-radius:8px;border:1px solid #ffc107;">
+            <!-- Section 1: PU Selection -->
+            <div class="card">
+                <div class="card-body">
+                    <span class="section-label">1. Polling Unit Selection</span>
+                    <div class="row g-2 mb-2">
+                        <div class="col-12">
+                            <label class="small text-muted fw-bold mb-1">STATE</label>
+                            <select id="s" class="form-select" onchange="loadLGAs()">
+                                <option value="">Select State</option>
+                            </select>
+                        </div>
+                        <div class="col-12">
+                            <label class="small text-muted fw-bold mb-1">LOCAL GOVT AREA</label>
+                            <select id="l" class="form-select" onchange="loadWards()">
+                                <option value="">Select LGA</option>
+                            </select>
+                        </div>
+                        <div class="col-12">
+                            <label class="small text-muted fw-bold mb-1">WARD</label>
+                            <select id="w" class="form-select" onchange="loadPUs()">
+                                <option value="">Select Ward</option>
+                            </select>
+                        </div>
+                        <div class="col-12">
+                            <label class="small text-muted fw-bold mb-1">POLLING UNIT</label>
+                            <select id="p" class="form-select" onchange="fillPU()">
+                                <option value="">Select Polling Unit</option>
+                            </select>
+                        </div>
+                    </div>
+                    <div class="row g-2 mt-1">
+                        <div class="col-4">
+                            <label class="small text-muted">Ward Code</label>
+                            <input type="text" id="wc" class="form-control text-center" readonly>
+                        </div>
+                        <div class="col-4">
+                            <label class="small text-muted">PU Code</label>
+                            <input type="text" id="pc" class="form-control text-center" readonly>
+                        </div>
+                        <div class="col-4">
+                            <label class="small text-muted">Location</label>
+                            <input type="text" id="loc" class="form-control" readonly style="font-size:0.75rem;">
                         </div>
                     </div>
                 </div>
             </div>
-            <div id="submitError" class="alert alert-danger d-none small py-2 mb-2 fw-bold" style="border-radius:8px;"></div>
-            <button class="btn btn-success btn-lg w-100 py-3 fw-bold" onclick="reviewSubmission()">UPLOAD PU RESULT</button>
+
+            <!-- Section 2: Party Scorecard -->
+            <div class="card">
+                <div class="card-body">
+                    <span class="section-label">2. Party Scorecard — 14 Parties</span>
+                    <div class="row g-2">{party_cards}</div>
+                </div>
+            </div>
+
+            <!-- Section 3: Accreditation -->
+            <div class="card">
+                <div class="card-body">
+                    <span class="section-label">3. Accreditation & Audit</span>
+                    <div class="row g-3">
+                        <div class="col-6">
+                            <label class="small text-muted fw-bold">Registered Voters</label>
+                            <input type="number" id="rv" class="form-control text-center" value="0" inputmode="numeric">
+                        </div>
+                        <div class="col-6">
+                            <label class="small text-muted fw-bold">Total Accredited</label>
+                            <input type="number" id="ta" class="form-control text-center" inputmode="numeric" oninput="calculateTotals()">
+                        </div>
+                        <div class="col-6">
+                            <label class="small text-muted fw-bold">Rejected Votes</label>
+                            <input type="number" id="rj" class="form-control text-center" value="0" inputmode="numeric" oninput="calculateTotals()">
+                        </div>
+                        <div class="col-6">
+                            <label class="small text-muted fw-bold" style="color:#dc3545;">Overvoting Alert</label>
+                            <div id="auditStatus" class="audit-badge bg-light text-muted">—</div>
+                        </div>
+                        <div class="col-6">
+                            <label class="small text-success fw-bold">✅ Valid Votes</label>
+                            <input type="number" id="vv" class="form-control text-center fw-bold" readonly style="color:#008751;">
+                        </div>
+                        <div class="col-6">
+                            <label class="small text-primary fw-bold">📊 Total Cast</label>
+                            <input type="number" id="tc" class="form-control text-center fw-bold" readonly style="color:#0d6efd;">
+                        </div>
+                    </div>
+                </div>
+            </div>
+
+            <!-- GPS -->
+            <button class="btn-gps mb-3" id="gpsBtn" onclick="getGPS()">
+                📍 Fix GPS Location <span class="text-muted small">(Recommended)</span>
+            </button>
+            <div id="gpsWarning" class="alert alert-warning d-none small py-2 mb-3">
+                ⚠️ GPS not captured. You can still submit, but location will not be recorded.
+            </div>
+
+            <!-- Section 4: EC8E Upload -->
+            <div class="card mb-3">
+                <div class="card-body">
+                    <span class="section-label">4. EC 8E Form Image</span>
+                    <label class="ec8e-upload-area w-100" for="ec8eFile">
+                        <div id="ec8eUploadLabel">
+                            📷 <strong>Tap to capture / upload EC 8E form</strong><br>
+                            <small class="text-muted">Optional — take a photo or choose from gallery</small>
+                        </div>
+                        <input type="file" id="ec8eFile" accept="image/*" capture="environment" class="d-none">
+                    </label>
+                    <div id="ec8ePreview" class="mt-3 text-center d-none">
+                        <img id="ec8eImg" src="#" alt="EC8E Preview"
+                            style="max-width:100%;max-height:220px;border-radius:10px;border:2px solid #ffc107;">
+                        <div class="mt-1"><small class="text-success fw-bold">✅ Image attached</small></div>
+                    </div>
+                </div>
+            </div>
+
+            <div id="submitError" class="alert alert-danger d-none small py-2 mb-3 fw-bold" style="border-radius:10px;"></div>
+
+            <button class="btn-submit" onclick="reviewSubmission()">
+                🗳️ UPLOAD PU RESULT
+            </button>
+
+            <div class="powered-by">
+                <img src="/static/logos/popson-logo.png" style="height:28px;object-fit:contain;vertical-align:middle;margin-right:8px;opacity:0.85;">
+                <span style="color:rgba(255,255,255,0.5);font-size:0.72rem;vertical-align:middle;">
+                    Powered by <strong style="color:rgba(255,255,255,0.8);">Popson Geospatial Services</strong>
+                </span>
+            </div>
         </div>
     </div>
 
     <!-- Confirmation Modal -->
     <div class="modal fade" id="confirmModal" tabindex="-1">
-      <div class="modal-dialog modal-dialog-centered">
-        <div class="modal-content" style="background:#1a1a1a;color:#fff;border:1px solid #ffc107;">
-          <div class="modal-header" style="border-bottom:1px solid #333;">
-            <h6 class="modal-title text-warning fw-bold">⚠️ CONFIRM RESULT SUBMISSION</h6>
+      <div class="modal-dialog modal-dialog-centered modal-dialog-scrollable">
+        <div class="modal-content">
+          <div class="modal-header">
+            <h6 class="modal-title text-warning fw-bold">⚠️ CONFIRM SUBMISSION</h6>
           </div>
           <div class="modal-body">
-            <div id="confirmPUInfo" class="mb-3 p-2 rounded" style="background:#111;font-size:0.8rem;"></div>
+            <div id="confirmPUInfo" class="mb-3 p-2 rounded" style="background:#111;font-size:0.8rem;border-radius:8px;"></div>
             <table class="table table-sm table-dark table-bordered mb-2" style="font-size:0.8rem;">
               <thead><tr><th>Party</th><th class="text-end">Votes</th></tr></thead>
               <tbody id="confirmPartyRows"></tbody>
             </table>
-            <div id="confirmAuditRows" class="p-2 rounded" style="background:#111;font-size:0.8rem;"></div>
+            <div id="confirmAuditRows" class="p-2 rounded" style="background:#111;font-size:0.8rem;border-radius:8px;"></div>
           </div>
-          <div class="modal-footer" style="border-top:1px solid #333;">
+          <div class="modal-footer">
             <button type="button" class="btn btn-outline-secondary btn-sm" data-bs-dismiss="modal">← EDIT</button>
-            <button type="button" class="btn btn-success btn-sm fw-bold" onclick="confirmAndSubmit()">✅ CONFIRM & SUBMIT</button>
+            <button type="button" class="btn btn-success btn-sm fw-bold px-4" onclick="confirmAndSubmit()">✅ CONFIRM & SUBMIT</button>
           </div>
         </div>
       </div>
     </div>
-    <div class="container pb-2" style="max-width: 850px;">
-    <div style="text-align:center;padding:20px 0 10px;border-top:1px solid rgba(255,255,255,0.12);margin-top:30px;">
-        <img src="/static/logos/popson-logo.png" style="height:30px;object-fit:contain;vertical-align:middle;margin-right:10px;opacity:0.9;">
-        <span style="color:rgba(255,255,255,0.55);font-size:0.75rem;vertical-align:middle;">Powered by <strong style="color:#fff;">Popson Geospatial Services</strong></span>
-    </div>
-    </div>
-    <script src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/js/bootstrap.bundle.min.js"></script>
 
+    <script src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/js/bootstrap.bundle.min.js"></script>
     <script>
         let lat = null, lon = null, officerId, puData = [], wardData = [], pendingPayload = null;
 
         async function start() {{
             const rawId = document.getElementById('oid').value.trim();
             if(!rawId) return;
-            const btn = document.querySelector('#loginArea button');
+            const btn = document.querySelector('#loginArea .btn-submit');
             const errEl = document.getElementById('loginError');
             btn.disabled = true; btn.innerText = 'Validating...';
             errEl.classList.add('d-none');
@@ -630,7 +819,7 @@ async def index():
                 if(!out.valid) {{
                     errEl.innerText = out.message;
                     errEl.classList.remove('d-none');
-                    btn.disabled = false; btn.innerText = 'Validate Access';
+                    btn.disabled = false; btn.innerText = '✅ VALIDATE ACCESS';
                     return;
                 }}
                 officerId = rawId;
@@ -643,20 +832,20 @@ async def index():
             }} catch(e) {{
                 errEl.innerText = 'Server error. Try again.';
                 errEl.classList.remove('d-none');
-                btn.disabled = false; btn.innerText = 'Validate Access';
+                btn.disabled = false; btn.innerText = '✅ VALIDATE ACCESS';
             }}
         }}
 
         function loadLGAs() {{
             fetch('/api/lgas/'+encodeURIComponent(document.getElementById('s').value)).then(r=>r.json()).then(data=>{{
-                const l = document.getElementById('l'); l.innerHTML = '<option value="">LGA</option>';
+                const l = document.getElementById('l'); l.innerHTML = '<option value="">Select LGA</option>';
                 data.forEach(item => l.add(new Option(item.toUpperCase(), item)));
             }});
         }}
         function loadWards() {{
             fetch(`/api/wards/${{encodeURIComponent(document.getElementById('s').value)}}/${{encodeURIComponent(document.getElementById('l').value)}}`).then(r=>r.json()).then(data=>{{
                 wardData = data;
-                const w = document.getElementById('w'); w.innerHTML = '<option value="">WARD</option>';
+                const w = document.getElementById('w'); w.innerHTML = '<option value="">Select Ward</option>';
                 data.forEach(item => w.add(new Option(item.name.toUpperCase(), item.name)));
             }});
         }}
@@ -666,7 +855,7 @@ async def index():
             document.getElementById('wc').value = wardObj ? wardObj.code : '';
             fetch(`/api/pus/${{encodeURIComponent(document.getElementById('s').value)}}/${{encodeURIComponent(document.getElementById('l').value)}}/${{encodeURIComponent(w)}}`).then(r=>r.json()).then(data=>{{
                 puData = data;
-                const p = document.getElementById('p'); p.innerHTML = '<option value="">SELECT PU</option>';
+                const p = document.getElementById('p'); p.innerHTML = '<option value="">Select Polling Unit</option>';
                 data.forEach((item, idx) => p.add(new Option(item.location.toUpperCase(), idx)));
             }});
         }}
@@ -686,30 +875,34 @@ async def index():
             document.getElementById('tc').value = cast;
             const msg = document.getElementById('auditStatus');
             if (acc > 0 && cast > acc) {{
-                msg.innerHTML = "⚠️ ERROR: Over-voting!";
-                msg.className = "mt-3 p-2 bg-danger text-white rounded text-center small fw-bold d-block";
+                msg.innerHTML = "⚠️ OVER-VOTING!";
+                msg.className = "audit-badge bg-danger text-white";
             }} else if (cast > 0 && cast === acc) {{
-                msg.innerHTML = "✅ AUDIT BALANCED";
-                msg.className = "mt-3 p-2 bg-success text-white rounded text-center small fw-bold d-block";
-            }} else {{ msg.className = "d-none"; }}
+                msg.innerHTML = "✅ BALANCED";
+                msg.className = "audit-badge bg-success text-white";
+            }} else {{
+                msg.innerHTML = "—";
+                msg.className = "audit-badge bg-light text-muted";
+            }}
         }}
 
-        // BUG FIX #5: GPS is now optional — shows label + warning, does not block submission
         function getGPS() {{
+            const btn = document.getElementById('gpsBtn');
+            btn.innerText = '⏳ Getting location...';
             navigator.geolocation.getCurrentPosition(
                 pos => {{
-                    lat = pos.coords.latitude;
-                    lon = pos.coords.longitude;
-                    document.getElementById('gpsLabel').innerText = `✅ GPS Fixed (${{lat.toFixed(4)}}, ${{lon.toFixed(4)}})`;
+                    lat = pos.coords.latitude; lon = pos.coords.longitude;
+                    btn.innerText = `✅ GPS Fixed (${{lat.toFixed(4)}}, ${{lon.toFixed(4)}})`;
+                    btn.classList.add('fixed');
                     document.getElementById('gpsWarning').classList.add('d-none');
                 }},
                 err => {{
+                    btn.innerText = '📍 Fix GPS Location (Recommended)';
                     document.getElementById('gpsWarning').classList.remove('d-none');
                 }}
             );
         }}
 
-        // BUG FIX #2: ec8eFile listener wrapped in DOMContentLoaded
         document.addEventListener('DOMContentLoaded', function() {{
             const ec8eInput = document.getElementById('ec8eFile');
             if (ec8eInput) {{
@@ -720,38 +913,45 @@ async def index():
                         reader.onload = e => {{
                             document.getElementById('ec8eImg').src = e.target.result;
                             document.getElementById('ec8ePreview').classList.remove('d-none');
+                            document.getElementById('ec8eUploadLabel').innerHTML =
+                                '📷 <strong>Image attached</strong> — tap to change';
                         }};
                         reader.readAsDataURL(file);
                     }}
                 }});
             }}
+            // Allow Enter key on login
+            document.getElementById('oid').addEventListener('keypress', function(e) {{
+                if(e.key === 'Enter') start();
+            }});
         }});
 
         async function reviewSubmission() {{
-            // BUG FIX #5: GPS warning shown but not blocking
-            if(!lat) {{
-                document.getElementById('gpsWarning').classList.remove('d-none');
-            }}
+            if(!lat) {{ document.getElementById('gpsWarning').classList.remove('d-none'); }}
             const v = {{}};
             document.querySelectorAll('.party-v').forEach(i => v[i.dataset.p] = parseInt(i.value || 0));
             pendingPayload = {{
-                officer_id: officerId, state: document.getElementById('s').value, lg: document.getElementById('l').value,
-                ward: document.getElementById('w').value, ward_code: document.getElementById('wc').value,
-                pu_code: document.getElementById('pc').value, location: document.getElementById('loc').value,
-                reg_voters: parseInt(document.getElementById('rv').value || 0), total_accredited: parseInt(document.getElementById('ta').value || 0),
-                valid_votes: parseInt(document.getElementById('vv').value || 0), rejected_votes: parseInt(document.getElementById('rj').value || 0),
-                total_cast: parseInt(document.getElementById('tc').value || 0), lat, lon, votes: v
+                officer_id: officerId, state: document.getElementById('s').value,
+                lg: document.getElementById('l').value, ward: document.getElementById('w').value,
+                ward_code: document.getElementById('wc').value, pu_code: document.getElementById('pc').value,
+                location: document.getElementById('loc').value,
+                reg_voters: parseInt(document.getElementById('rv').value || 0),
+                total_accredited: parseInt(document.getElementById('ta').value || 0),
+                valid_votes: parseInt(document.getElementById('vv').value || 0),
+                rejected_votes: parseInt(document.getElementById('rj').value || 0),
+                total_cast: parseInt(document.getElementById('tc').value || 0),
+                lat, lon, votes: v
             }};
             document.getElementById('confirmPUInfo').innerHTML =
                 `<b>📍 PU:</b> ${{pendingPayload.location}}<br>` +
-                `<b>🗳 Ward:</b> ${{pendingPayload.ward}} &nbsp;|&nbsp; <b>LGA:</b> ${{pendingPayload.lg}}<br>` +
+                `<b>🏛 Ward:</b> ${{pendingPayload.ward}} &nbsp;|&nbsp; <b>LGA:</b> ${{pendingPayload.lg}}<br>` +
                 `<b>🔑 PU Code:</b> ${{pendingPayload.pu_code}} &nbsp;|&nbsp; <b>Officer:</b> ${{pendingPayload.officer_id}}` +
-                (lat ? `<br><b>📡 GPS:</b> ${{lat.toFixed(4)}}, ${{lon.toFixed(4)}}` : `<br><span class="text-warning">⚠️ No GPS captured</span>`);
+                (lat ? `<br><b>📡 GPS:</b> ${{lat.toFixed(4)}}, ${{lon.toFixed(4)}}` : `<br><span class="text-warning">⚠️ No GPS</span>`);
             const tbody = document.getElementById('confirmPartyRows');
             tbody.innerHTML = '';
-            Object.entries(v).forEach(([p, score]) => {{
+            Object.entries(v).filter(([,s])=>s>0).forEach(([p, score]) => {{
                 const tr = document.createElement('tr');
-                tr.innerHTML = `<td>${{p}}</td><td class="text-end fw-bold ${{score > 0 ? 'text-warning' : 'text-secondary'}}">${{score}}</td>`;
+                tr.innerHTML = `<td>${{p}}</td><td class="text-end fw-bold text-warning">${{score}}</td>`;
                 tbody.appendChild(tr);
             }});
             document.getElementById('confirmAuditRows').innerHTML =
