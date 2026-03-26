@@ -259,6 +259,7 @@ async def submit(
                     datetime.now().isoformat(), votes_json, ec8e_filename
                 ))
                 conn.commit()
+                logger.info(f"✅ Submission saved: {payload.get('pu_code')}")
         # Fire WhatsApp alert in background (non-blocking)
         alert_payload = {**payload, "timestamp": datetime.now().strftime("%d %b %Y %H:%M")}
         threading.Thread(target=send_whatsapp_alert, args=(alert_payload,), daemon=True).start()
@@ -966,16 +967,29 @@ async def index():
         async function confirmAndSubmit() {{
             const btn = document.querySelector('#confirmModal .btn-success');
             btn.disabled = true; btn.innerText = 'Submitting...';
-            const fd = new FormData();
-            fd.append('data', JSON.stringify(pendingPayload));
-            const ec8eInput = document.getElementById('ec8eFile');
-            if (ec8eInput && ec8eInput.files[0]) {{ fd.append('ec8e_image', ec8eInput.files[0]); }}
-            const res = await fetch('/submit', {{ method: 'POST', body: fd }});
-            const out = await res.json();
-            bootstrap.Modal.getInstance(document.getElementById('confirmModal')).hide();
-            alert(out.message);
-            if(out.status === 'success') location.reload();
-            else {{ btn.disabled = false; btn.innerText = '✅ CONFIRM & SUBMIT'; }}
+            try {{
+                const fd = new FormData();
+                fd.append('data', JSON.stringify(pendingPayload));
+                const ec8eInput = document.getElementById('ec8eFile');
+                if (ec8eInput && ec8eInput.files[0]) {{ fd.append('ec8e_image', ec8eInput.files[0]); }}
+                const res = await fetch('/submit', {{ method: 'POST', body: fd }});
+                if (!res.ok) {{
+                    throw new Error('Server error: ' + res.status + ' ' + res.statusText);
+                }}
+                const out = await res.json();
+                bootstrap.Modal.getInstance(document.getElementById('confirmModal')).hide();
+                alert(out.message);
+                if(out.status === 'success') location.reload();
+                else {{
+                    document.getElementById('submitError').innerText = out.message;
+                    document.getElementById('submitError').classList.remove('d-none');
+                    btn.disabled = false; btn.innerText = '✅ CONFIRM & SUBMIT';
+                }}
+            }} catch(e) {{
+                bootstrap.Modal.getInstance(document.getElementById('confirmModal')).hide();
+                alert('❌ Submission failed: ' + e.message + '\n\nPlease check your connection and try again.');
+                btn.disabled = false; btn.innerText = '✅ CONFIRM & SUBMIT';
+            }}
         }}
     </script>
 </body>
