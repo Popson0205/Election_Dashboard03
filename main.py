@@ -642,7 +642,7 @@ async def index():
                         placeholder="WARDCODE-PUCODE" autocomplete="off"
                         autocapitalize="characters" style="letter-spacing:2px;font-size:1.1rem;">
                     <div id="loginError" class="alert alert-danger d-none small py-2 mb-3"></div>
-                    <button class="btn-submit" onclick="start()">✅ VALIDATE ACCESS</button>
+                    <button class="btn-submit" id="loginBtn" onclick="start()">✅ VALIDATE ACCESS</button>
                 </div>
             </div>
         </div>
@@ -810,7 +810,7 @@ async def index():
         async function start() {{
             const rawId = document.getElementById('oid').value.trim();
             if(!rawId) return;
-            const btn = document.querySelector('#loginArea .btn-submit');
+            const btn = document.getElementById('loginBtn');
             const errEl = document.getElementById('loginError');
             btn.disabled = true; btn.innerText = 'Validating...';
             errEl.classList.add('d-none');
