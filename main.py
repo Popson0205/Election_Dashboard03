@@ -1,7 +1,6 @@
-import psycopg2
+import sqlite3
 import shutil
 import uuid
-from psycopg2.extras import RealDictCursor
 import os
 import json
 import logging
@@ -93,20 +92,77 @@ os.makedirs(STATIC_PATH, exist_ok=True)
 app.mount("/static", StaticFiles(directory=STATIC_PATH), name="static")
 
 # --- DATABASE CONNECTION ---
-DATABASE_URL = os.environ.get("DATABASE_URL", "https://github.com/Popson0205/Election_Dashboard03/releases/download/v1/election_v3.db")
+DB_RELEASE_URL = os.environ.get(
+    "DB_RELEASE_URL",
+    "https://github.com/Popson0205/Election_Dashboard03/releases/download/v1/election_v3.db"
+)
+DB_PATH = os.path.join(BASE_DIR, "election_v3.db")
+
+def _ensure_db():
+    """Download the SQLite DB from GitHub Releases if not already present."""
+    if not os.path.exists(DB_PATH):
+        import urllib.request
+        logger.info(f"Downloading database from {DB_RELEASE_URL} ...")
+        urllib.request.urlretrieve(DB_RELEASE_URL, DB_PATH)
+        logger.info(f"Database saved to {DB_PATH}")
+
+_ensure_db()
+
+class _DictRow(sqlite3.Row):
+    """Make sqlite3.Row behave like a dict (supports row['key'] and row.get())."""
+    def get(self, key, default=None):
+        try:
+            return self[key]
+        except (IndexError, KeyError):
+            return default
+
+class _FakeCursor:
+    """Wraps sqlite3.Cursor so it supports 'with conn.cursor() as cur:' syntax."""
+    def __init__(self, cur):
+        self._cur = cur
+    def execute(self, sql, params=()):
+        self._cur.execute(sql, params)
+    def fetchone(self):
+        return self._cur.fetchone()
+    def fetchall(self):
+        return self._cur.fetchall()
+    def close(self):
+        self._cur.close()
+    def __enter__(self):
+        return self
+    def __exit__(self, *args):
+        self._cur.close()
+
+class _FakeConn:
+    """Wraps sqlite3 connection so it works as a context manager like psycopg2."""
+    def __init__(self, conn):
+        self._conn = conn
+    def cursor(self):
+        return _FakeCursor(self._conn.cursor())
+    def commit(self):
+        self._conn.commit()
+    def close(self):
+        self._conn.close()
+    def __enter__(self):
+        return self
+    def __exit__(self, exc_type, exc_val, exc_tb):
+        if exc_type is None:
+            self._conn.commit()
+        self._conn.close()
 
 def get_db():
-    return psycopg2.connect(DATABASE_URL, cursor_factory=RealDictCursor, sslmode='require')
+    conn = sqlite3.connect(DB_PATH)
+    conn.row_factory = _DictRow
+    return _FakeConn(conn)
 
 # --- DATABASE INITIALIZATION ---
-# BUG FIX #3: Added ec8e_image column to CREATE TABLE
 def init_db():
     try:
         conn = get_db()
         cur = conn.cursor()
         cur.execute("""
             CREATE TABLE IF NOT EXISTS field_submissions (
-                id SERIAL PRIMARY KEY,
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
                 officer_id TEXT,
                 state TEXT,
                 lg TEXT,
@@ -127,13 +183,12 @@ def init_db():
                 UNIQUE(pu_code)
             )
         """)
-        # Also add column if table already exists without it (safe migration)
-        cur.execute("""
-            ALTER TABLE field_submissions
-            ADD COLUMN IF NOT EXISTS ec8e_image TEXT
-        """)
+        # Safe migration: add ec8e_image column if missing
+        try:
+            cur.execute("ALTER TABLE field_submissions ADD COLUMN ec8e_image TEXT")
+        except Exception:
+            pass  # Column already exists — fine
         conn.commit()
-        cur.close()
         conn.close()
         print("✅ Table ready")
     except Exception as e:
@@ -154,7 +209,7 @@ def validate_officer(officer_id: str):
                 cur.execute(
                     """SELECT ward, lg, location, pu_code, ward_code, state
                        FROM polling_units
-                       WHERE ward_code = %s AND pu_code = %s
+                       WHERE ward_code = ? AND pu_code = ?
                        LIMIT 1""",
                     (ward_code, pu_code)
                 )
@@ -188,7 +243,7 @@ def get_lgas(state: str):
     with get_db() as conn:
         with conn.cursor() as cur:
             # BUG FIX #6: Use the actual state param (lowercased) instead of hardcoded 'osun'
-            cur.execute("SELECT DISTINCT lg FROM polling_units WHERE LOWER(state) = LOWER(%s) ORDER BY lg", (state,))
+            cur.execute("SELECT DISTINCT lg FROM polling_units WHERE LOWER(state) = LOWER(?) ORDER BY lg", (state,))
             rows = cur.fetchall()
             return [r["lg"] for r in rows]
 
@@ -196,7 +251,7 @@ def get_lgas(state: str):
 def get_wards(state: str, lg: str):
     with get_db() as conn:
         with conn.cursor() as cur:
-            cur.execute("SELECT DISTINCT ward, ward_code FROM polling_units WHERE LOWER(state) = LOWER(%s) AND lg = %s ORDER BY ward", (state, lg))
+            cur.execute("SELECT DISTINCT ward, ward_code FROM polling_units WHERE LOWER(state) = LOWER(?) AND lg = ? ORDER BY ward", (state, lg))
             rows = cur.fetchall()
             return [{"name": r["ward"], "code": r["ward_code"]} for r in rows]
 
@@ -204,7 +259,7 @@ def get_wards(state: str, lg: str):
 def get_pus(state: str, lg: str, ward: str):
     with get_db() as conn:
         with conn.cursor() as cur:
-            cur.execute("SELECT location, pu_code FROM polling_units WHERE LOWER(state) = LOWER(%s) AND lg = %s AND ward = %s", (state, lg, ward))
+            cur.execute("SELECT location, pu_code FROM polling_units WHERE LOWER(state) = LOWER(?) AND lg = ? AND ward = ?", (state, lg, ward))
             rows = cur.fetchall()
             return [{"location": r["location"], "pu_code": r["pu_code"]} for r in rows]
 
@@ -243,7 +298,7 @@ async def submit(
                     officer_id, state, lg, ward, ward_code, pu_code, location,
                     reg_voters, total_accredited, valid_votes, rejected_votes, total_cast,
                     lat, lon, timestamp, votes_json, ec8e_image
-                ) VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s)""", (
+                ) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)""", (
                     payload.get("officer_id"), payload.get("state"), payload.get("lg"),
                     payload.get("ward"), payload.get("ward_code"), payload.get("pu_code"),
                     payload.get("location"), payload.get("reg_voters"), payload.get("total_accredited"),
@@ -255,7 +310,7 @@ async def submit(
         alert_payload = {**payload, "timestamp": datetime.now().strftime("%d %b %Y %H:%M")}
         threading.Thread(target=send_whatsapp_alert, args=(alert_payload,), daemon=True).start()
         return {"status": "success", "message": "Result Uploaded Successfully"}
-    except psycopg2.IntegrityError:
+    except sqlite3.IntegrityError:
         return {"status": "error", "message": "REJECTED: A submission for this Polling Unit already exists."}
     except Exception as e:
         return {"status": "error", "message": str(e)}
@@ -326,8 +381,8 @@ async def ai_interpret(data: dict):
 def get_dash_filters():
     with get_db() as conn:
         with conn.cursor() as cur:
-            cur.execute("SELECT DISTINCT state, lg, ward FROM polling_units WHERE state = 'osun' ORDER BY lg, ward")
-            return cur.fetchall()
+            cur.execute("SELECT DISTINCT state, lg, ward FROM polling_units WHERE LOWER(state) = 'osun' ORDER BY lg, ward")
+            return [dict(r) for r in cur.fetchall()]
 
 @app.get("/export/csv")
 async def export_csv():
