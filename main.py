@@ -93,7 +93,7 @@ os.makedirs(STATIC_PATH, exist_ok=True)
 app.mount("/static", StaticFiles(directory=STATIC_PATH), name="static")
 
 # --- DATABASE CONNECTION ---
-DATABASE_URL = os.environ.get("DATABASE_URL", "postgresql://election_v3_db_user:KHjYceeGY0OL5w1RMhVFM18AyRipv9Tl@dpg-d6gnomfkijhs73f1cfe0-a.oregon-postgres.render.com/election_v3_db")
+DATABASE_URL = os.environ.get("DATABASE_URL", "https://github.com/Popson0205/Election_Dashboard03/releases/download/v1/election_v3.db")
 
 def get_db():
     return psycopg2.connect(DATABASE_URL, cursor_factory=RealDictCursor, sslmode='require')
