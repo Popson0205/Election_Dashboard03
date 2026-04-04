@@ -7,11 +7,13 @@ import logging
 import io
 import csv
 from datetime import datetime
-from fastapi import FastAPI, UploadFile, File, Form
-from fastapi.responses import HTMLResponse, StreamingResponse
+from fastapi import FastAPI, UploadFile, File, Form, Request, Response, Cookie, HTTPException, Depends
+from fastapi.responses import HTMLResponse, StreamingResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
 import cloudinary
 import cloudinary.uploader
+import hashlib, time, secrets
+from collections import defaultdict
 
 # --- WHATSAPP ALERT ---
 import threading
@@ -110,14 +112,94 @@ logger = logging.getLogger(__name__)
 
 app = FastAPI()
 
-# ── CORS — allow all origins so dashboard works inside iframes ────────────────
+# ── CORS — restricted to same origin only ─────────────────────────────────────
 from fastapi.middleware.cors import CORSMiddleware
+_ALLOWED_ORIGINS = [o.strip() for o in os.environ.get("ALLOWED_ORIGINS", "").split(",") if o.strip()]
+if not _ALLOWED_ORIGINS:
+    _ALLOWED_ORIGINS = ["*"]   # fallback for local dev; set ALLOWED_ORIGINS in prod
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],
-    allow_methods=["*"],
-    allow_headers=["*"],
+    allow_origins=_ALLOWED_ORIGINS,
+    allow_credentials=True,
+    allow_methods=["GET", "POST"],
+    allow_headers=["Content-Type", "X-Requested-With"],
 )
+# ─────────────────────────────────────────────────────────────────────────────
+
+# ── Security headers middleware ───────────────────────────────────────────────
+from starlette.middleware.base import BaseHTTPMiddleware
+class SecurityHeadersMiddleware(BaseHTTPMiddleware):
+    async def dispatch(self, request: Request, call_next):
+        response = await call_next(request)
+        response.headers["X-Content-Type-Options"] = "nosniff"
+        response.headers["X-Frame-Options"] = "SAMEORIGIN"
+        response.headers["Referrer-Policy"] = "strict-origin-when-cross-origin"
+        response.headers["Permissions-Policy"] = "geolocation=(self), camera=(self)"
+        response.headers["Cache-Control"] = "no-store"
+        return response
+app.add_middleware(SecurityHeadersMiddleware)
+# ─────────────────────────────────────────────────────────────────────────────
+
+# ── Dashboard key (set DASHBOARD_KEY env var — keep it secret!) ───────────────
+_DASHBOARD_KEY_HASH = hashlib.sha256(
+    os.environ.get("DASHBOARD_KEY", "changeme-set-in-env").encode()
+).hexdigest()
+_SESSION_TOKENS: dict = {}   # token -> expiry timestamp
+_SESSION_TTL = 8 * 3600      # 8 hours
+
+def _make_session_token() -> str:
+    token = secrets.token_hex(32)
+    _SESSION_TOKENS[token] = time.time() + _SESSION_TTL
+    return token
+
+def _is_valid_token(token: str | None) -> bool:
+    if not token:
+        return False
+    expiry = _SESSION_TOKENS.get(token)
+    if not expiry:
+        return False
+    if time.time() > expiry:
+        _SESSION_TOKENS.pop(token, None)
+        return False
+    return True
+
+def _require_dashboard(request: Request):
+    token = request.cookies.get("ds_session")
+    if not _is_valid_token(token):
+        raise HTTPException(status_code=403, detail="Dashboard access denied")
+
+# ── Rate limiter for validate_officer (10 attempts / 60s per IP) ──────────────
+_rl_store: dict = defaultdict(list)
+_RL_MAX   = 10
+_RL_WINDOW = 60
+
+def _check_rate_limit(ip: str):
+    now = time.time()
+    calls = [t for t in _rl_store[ip] if now - t < _RL_WINDOW]
+    calls.append(now)
+    _rl_store[ip] = calls
+    if len(calls) > _RL_MAX:
+        raise HTTPException(status_code=429, detail="Too many attempts. Try again in 60 seconds.")
+
+# ── File upload guard ─────────────────────────────────────────────────────────
+_MAX_UPLOAD_BYTES = 5 * 1024 * 1024   # 5 MB
+_ALLOWED_MIME_PREFIXES = ("image/jpeg", "image/png", "image/webp", "image/gif")
+_ALLOWED_MAGIC = {
+    b"\xff\xd8\xff": "image/jpeg",
+    b"\x89PNG":        "image/png",
+    b"RIFF":           "image/webp",
+    b"GIF8":           "image/gif",
+}
+
+async def _safe_read_image(upload: UploadFile, max_bytes: int = _MAX_UPLOAD_BYTES) -> bytes:
+    data = await upload.read(max_bytes + 1)
+    if len(data) > max_bytes:
+        raise HTTPException(status_code=413, detail="Image too large (max 5MB)")
+    magic = data[:4]
+    ok = any(magic.startswith(sig) for sig in _ALLOWED_MAGIC)
+    if not ok:
+        raise HTTPException(status_code=415, detail="Unsupported file type. JPEG/PNG/WebP only.")
+    return data
 # ─────────────────────────────────────────────────────────────────────────────
 
 # ── Cloudinary Configuration ──────────────────────────────────────────────────
@@ -270,7 +352,12 @@ init_db()
 
 # --- API ENDPOINTS ---
 @app.get("/api/validate_officer/{officer_id}")
-def validate_officer(officer_id: str):
+def validate_officer(officer_id: str, request: Request):
+    _check_rate_limit(request.client.host)
+    # Cap length and strip anything that isn't alphanumeric / dash / slash / space
+    officer_id = officer_id[:60]
+    import re as _re
+    officer_id = _re.sub(r"[^A-Za-z0-9\-/_ ]", "", officer_id)
     try:
         parts = officer_id.split("-", 1)
         if len(parts) != 2:
@@ -348,7 +435,7 @@ async def submit(
             safe_pu = str(payload.get("pu_code", "unk")).replace("/", "_").replace(" ", "_")
             public_id = f"ec8e_forms/{safe_pu}_{uuid.uuid4().hex[:8]}"
             try:
-                img_bytes = await ec8e_image.read()
+                img_bytes = await _safe_read_image(ec8e_image)
                 upload_result = cloudinary.uploader.upload(
                     img_bytes,
                     public_id=public_id,
@@ -450,14 +537,16 @@ async def ai_interpret(data: dict):
     }
 
 @app.get("/api/dashboard_filters")
-def get_dash_filters():
+def get_dash_filters(request: Request):
+    _require_dashboard(request)
     with get_db() as conn:
         with conn.cursor() as cur:
             cur.execute("SELECT DISTINCT state, lg, ward FROM polling_units WHERE LOWER(state) = 'osun' ORDER BY lg, ward")
             return [dict(r) for r in cur.fetchall()]
 
 @app.get("/export/csv")
-async def export_csv():
+async def export_csv(request: Request):
+    _require_dashboard(request)
     try:
         import openpyxl
     except ImportError:
@@ -559,8 +648,41 @@ async def export_csv():
         media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
         headers={"Content-Disposition":"attachment; filename=Accord_Osun2026_Results.xlsx"})
 
+# ── Dashboard authentication endpoint ────────────────────────────────────────
+@app.post("/api/verify-dashboard")
+async def verify_dashboard(request: Request, response: Response):
+    try:
+        body = await request.json()
+        key = str(body.get("key", ""))
+    except Exception:
+        raise HTTPException(status_code=400, detail="Invalid request")
+    given_hash = hashlib.sha256(key.encode()).hexdigest()
+    if not secrets.compare_digest(given_hash, _DASHBOARD_KEY_HASH):
+        raise HTTPException(status_code=401, detail="Invalid dashboard key")
+    token = _make_session_token()
+    response.set_cookie(
+        key="ds_session",
+        value=token,
+        httponly=True,
+        samesite="lax",
+        secure=True,
+        max_age=_SESSION_TTL,
+        path="/"
+    )
+    return {"status": "ok"}
+
+@app.post("/api/logout-dashboard")
+async def logout_dashboard(request: Request, response: Response):
+    token = request.cookies.get("ds_session")
+    if token:
+        _SESSION_TOKENS.pop(token, None)
+    response.delete_cookie("ds_session", path="/")
+    return {"status": "ok"}
+# ─────────────────────────────────────────────────────────────────────────────
+
 @app.get("/submissions")
-async def get_dashboard_data():
+async def get_dashboard_data(request: Request):
+    _require_dashboard(request)
     with get_db() as conn:
         with conn.cursor() as cur:
             cur.execute("SELECT * FROM field_submissions WHERE state = 'osun' ORDER BY timestamp DESC")
@@ -1832,11 +1954,12 @@ REPORT_HTML = """
 # --- DASHBOARD PAGE ---
 # ── INCIDENT DASHBOARD ────────────────────────────────────────────────────────
 @app.get("/incident-dashboard", response_class=HTMLResponse)
-async def incident_dashboard_page():
-    return HTMLResponse(content=INCIDENT_DASHBOARD_HTML, headers={
-        "X-Frame-Options": "ALLOWALL",
-        "Content-Security-Policy": "frame-ancestors *"
-    })
+async def incident_dashboard_page(request: Request):
+    token = request.cookies.get("ds_session")
+    if not _is_valid_token(token):
+        from fastapi.responses import RedirectResponse
+        return RedirectResponse(url="/dashboard", status_code=302)
+    return HTMLResponse(content=INCIDENT_DASHBOARD_HTML)
 
 INCIDENT_DASHBOARD_HTML = """
 <!DOCTYPE html>
@@ -2150,7 +2273,8 @@ INCIDENT_DASHBOARD_HTML = """
 # ── INSIGHT API ENDPOINTS ─────────────────────────────────────────────────────
 
 @app.get("/api/lga_completion")
-async def lga_completion():
+async def lga_completion(request: Request):
+    _require_dashboard(request)
     TOTAL_PUS_PER_LGA = {
         "osogbo": 218,"olorunda": 210,"egbedore": 72,"ede north": 88,"ede south": 50,
         "ejigbo": 120,"ife central": 148,"ife east": 118,"ife north": 74,"ife south": 84,
@@ -2177,7 +2301,8 @@ async def lga_completion():
         return []
 
 @app.get("/api/swing_pus")
-async def swing_pus():
+async def swing_pus(request: Request):
+    _require_dashboard(request)
     try:
         conn = get_db(); cur = conn.cursor()
         cur.execute("SELECT * FROM field_submissions")
@@ -2204,7 +2329,8 @@ async def swing_pus():
         return []
 
 @app.get("/api/integrity_flags")
-async def integrity_flags():
+async def integrity_flags(request: Request):
+    _require_dashboard(request)
     try:
         conn = get_db(); cur = conn.cursor()
         cur.execute("SELECT * FROM field_submissions")
@@ -2230,7 +2356,8 @@ async def integrity_flags():
         return []
 
 @app.get("/api/collation_timeline")
-async def collation_timeline():
+async def collation_timeline(request: Request):
+    _require_dashboard(request)
     try:
         conn = get_db(); cur = conn.cursor()
         cur.execute("SELECT location, lg, timestamp FROM field_submissions ORDER BY timestamp ASC")
@@ -2240,7 +2367,8 @@ async def collation_timeline():
         return []
 
 @app.get("/api/agent_leaderboard")
-async def agent_leaderboard():
+async def agent_leaderboard(request: Request):
+    _require_dashboard(request)
     try:
         conn = get_db(); cur = conn.cursor()
         cur.execute("""SELECT officer_id, COUNT(*) as submissions, MAX(timestamp) as last_submission
@@ -2254,7 +2382,8 @@ async def agent_leaderboard():
 # ── INCIDENT ENDPOINTS ────────────────────────────────────────────────────────
 
 @app.get("/api/incidents")
-async def get_incidents():
+async def get_incidents(request: Request):
+    _require_dashboard(request)
     try:
         with get_db() as conn:
             with conn.cursor() as cur:
@@ -2277,7 +2406,7 @@ async def submit_incident(
             safe_pu = str(payload.get("pu_code", "unk")).replace("/", "_").replace(" ", "_")
             public_id = f"incidents/{safe_pu}_{uuid.uuid4().hex[:8]}"
             try:
-                img_bytes = await evidence.read()
+                img_bytes = await _safe_read_image(evidence)
                 upload_result = cloudinary.uploader.upload(
                     img_bytes,
                     public_id=public_id,
@@ -2323,13 +2452,186 @@ async def submit_incident(
         return {"status": "error", "message": str(e)}
 
 # ─────────────────────────────────────────────────────────────────────────────
+# ── Dashboard login page ──────────────────────────────────────────────────────
+DASHBOARD_LOGIN_HTML = """
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>ACCORD — Dashboard Access</title>
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;600;700;900&display=swap" rel="stylesheet">
+    <style>
+        *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+        body {
+            font-family: 'Inter', sans-serif;
+            background: #020c06;
+            color: #fff;
+            min-height: 100vh;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            overflow: hidden;
+        }
+        body::before {
+            content: '';
+            position: fixed;
+            inset: 0;
+            background:
+                radial-gradient(ellipse 120% 80% at 50% -10%, rgba(0,135,81,0.18) 0%, transparent 60%),
+                linear-gradient(160deg, #020c06 0%, #041508 40%, #020c06 100%);
+            z-index: 0;
+        }
+        .grid {
+            position: fixed; inset: 0; z-index: 0;
+            background-image:
+                linear-gradient(rgba(0,135,81,0.05) 1px, transparent 1px),
+                linear-gradient(90deg, rgba(0,135,81,0.05) 1px, transparent 1px);
+            background-size: 60px 60px;
+            pointer-events: none;
+        }
+        .card {
+            position: relative; z-index: 1;
+            background: rgba(255,255,255,0.04);
+            border: 1px solid rgba(0,135,81,0.25);
+            border-radius: 20px;
+            padding: 48px 40px;
+            width: 100%;
+            max-width: 420px;
+            text-align: center;
+            box-shadow: 0 0 60px rgba(0,135,81,0.1);
+        }
+        .lock-icon {
+            width: 64px; height: 64px;
+            border-radius: 50%;
+            background: rgba(0,135,81,0.12);
+            border: 1px solid rgba(0,135,81,0.3);
+            display: flex; align-items: center; justify-content: center;
+            font-size: 1.6rem;
+            margin: 0 auto 24px;
+            box-shadow: 0 0 30px rgba(0,135,81,0.2);
+        }
+        .tag {
+            display: inline-block;
+            font-size: 0.6rem; font-weight: 700;
+            letter-spacing: 0.18em; text-transform: uppercase;
+            color: #ffc107;
+            background: rgba(255,193,7,0.1);
+            border: 1px solid rgba(255,193,7,0.2);
+            border-radius: 20px;
+            padding: 3px 12px;
+            margin-bottom: 14px;
+        }
+        h1 { font-size: 1.4rem; font-weight: 900; margin-bottom: 8px; }
+        p { font-size: 0.8rem; color: rgba(255,255,255,0.4); margin-bottom: 32px; line-height: 1.5; }
+        .input-wrap { position: relative; margin-bottom: 12px; }
+        input[type="password"] {
+            width: 100%;
+            background: rgba(255,255,255,0.05);
+            border: 1px solid rgba(0,135,81,0.3);
+            border-radius: 12px;
+            color: #fff;
+            font-size: 1rem;
+            padding: 14px 48px 14px 18px;
+            outline: none;
+            transition: border-color 0.2s;
+            letter-spacing: 0.12em;
+        }
+        input[type="password"]:focus { border-color: rgba(0,135,81,0.7); }
+        .toggle-eye {
+            position: absolute; right: 14px; top: 50%;
+            transform: translateY(-50%);
+            background: none; border: none; color: rgba(255,255,255,0.3);
+            cursor: pointer; font-size: 1rem; padding: 0;
+        }
+        .toggle-eye:hover { color: rgba(255,255,255,0.7); }
+        button.submit {
+            width: 100%;
+            background: linear-gradient(135deg, #008751, #00b368);
+            border: none; border-radius: 12px;
+            color: #fff; font-size: 0.95rem; font-weight: 700;
+            padding: 14px;
+            cursor: pointer;
+            transition: opacity 0.2s, transform 0.1s;
+            margin-bottom: 16px;
+        }
+        button.submit:hover { opacity: 0.9; }
+        button.submit:active { transform: scale(0.98); }
+        button.submit:disabled { opacity: 0.5; cursor: not-allowed; }
+        .error {
+            background: rgba(220,53,69,0.15);
+            border: 1px solid rgba(220,53,69,0.3);
+            border-radius: 8px;
+            color: #ff6b6b;
+            font-size: 0.78rem;
+            padding: 10px 14px;
+            margin-bottom: 12px;
+            display: none;
+        }
+        .back { font-size: 0.72rem; color: rgba(255,255,255,0.25); text-decoration: none; }
+        .back:hover { color: rgba(255,255,255,0.5); }
+    </style>
+</head>
+<body>
+<div class="grid"></div>
+<div class="card">
+    <div class="lock-icon">🔐</div>
+    <div class="tag">Restricted Access</div>
+    <h1>Dashboard Access</h1>
+    <p>This dashboard is restricted to authorised command team members only. Enter your access key to continue.</p>
+    <div class="error" id="err"></div>
+    <div class="input-wrap">
+        <input type="password" id="key" placeholder="Enter access key" autocomplete="off" onkeydown="if(event.key==='Enter')verify()">
+        <button class="toggle-eye" onclick="toggleEye()" id="eyeBtn" title="Show/hide">👁</button>
+    </div>
+    <button class="submit" id="btn" onclick="verify()">Unlock Dashboard →</button>
+    <a href="/" class="back">← Back to home</a>
+</div>
+<script>
+    function toggleEye() {
+        const inp = document.getElementById('key');
+        inp.type = inp.type === 'password' ? 'text' : 'password';
+    }
+    async function verify() {
+        const key = document.getElementById('key').value.trim();
+        const btn = document.getElementById('btn');
+        const err = document.getElementById('err');
+        if (!key) return;
+        btn.disabled = true; btn.textContent = 'Verifying...';
+        err.style.display = 'none';
+        try {
+            const res = await fetch('/api/verify-dashboard', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ key })
+            });
+            if (res.ok) {
+                window.location.href = '/dashboard';
+            } else {
+                err.textContent = 'Invalid access key. Contact your system administrator.';
+                err.style.display = 'block';
+                btn.disabled = false; btn.textContent = 'Unlock Dashboard →';
+            }
+        } catch(e) {
+            err.textContent = 'Connection error. Try again.';
+            err.style.display = 'block';
+            btn.disabled = false; btn.textContent = 'Unlock Dashboard →';
+        }
+    }
+</script>
+</body>
+</html>
+"""
+# ─────────────────────────────────────────────────────────────────────────────
+
+
 @app.get("/dashboard", response_class=HTMLResponse)
-async def dashboard_page():
+async def dashboard_page(request: Request):
     from fastapi.responses import HTMLResponse as _HR
-    return _HR(content=DASHBOARD_HTML, headers={
-        "X-Frame-Options": "ALLOWALL",
-        "Content-Security-Policy": "frame-ancestors *"
-    })
+    token = request.cookies.get("ds_session")
+    if not _is_valid_token(token):
+        return _HR(content=DASHBOARD_LOGIN_HTML)
+    return _HR(content=DASHBOARD_HTML)
 
 DASHBOARD_HTML = """
 <!DOCTYPE html>
@@ -2439,6 +2741,9 @@ DASHBOARD_HTML = """
         <a href="/export/csv" class="btn btn-sm btn-outline-warning py-1 px-3" style="font-size: 11px;">
             <i class="bi bi-download"></i> EXPORT CSV
         </a>
+        <button onclick="logoutDash()" class="btn btn-sm btn-outline-danger py-1 px-3" style="font-size:11px;">
+            🔒 LOCK
+        </button>
     </div>
 </nav>
 
@@ -2699,6 +3004,11 @@ DASHBOARD_HTML = """
     }
 
     document.addEventListener('DOMContentLoaded', init);
+
+    async function logoutDash() {
+        await fetch('/api/logout-dashboard', { method: 'POST' });
+        window.location.href = '/dashboard';
+    }
 
 
 function openOverlay(id) {
