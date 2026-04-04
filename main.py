@@ -408,12 +408,14 @@ init_db()
 
 # --- API ENDPOINTS ---
 @app.get("/api/validate_officer/{officer_id}")
-def validate_officer(officer_id: str, request: Request):
+def validate_officer(officer_id: str, request: Request, lg: str = ""):
     _check_rate_limit(request.client.host)
-    # Cap length and strip anything that isn't alphanumeric / dash / slash / space
     officer_id = officer_id[:60]
     import re as _re
     officer_id = _re.sub(r"[^A-Za-z0-9\-/_ ]", "", officer_id)
+    lg = lg.strip()[:60]
+    if not lg:
+        return {"valid": False, "message": "Please select your LGA first."}
     try:
         parts = officer_id.split("-", 1)
         if len(parts) != 2:
@@ -426,8 +428,9 @@ def validate_officer(officer_id: str, request: Request):
                        FROM polling_units
                        WHERE ward_code = ? AND pu_code = ?
                        AND LOWER(state) = 'osun'
+                       AND LOWER(lg) = LOWER(?)
                        LIMIT 1""",
-                    (ward_code, pu_code)
+                    (ward_code, pu_code, lg)
                 )
                 row = cur.fetchone()
                 if row:
@@ -442,7 +445,7 @@ def validate_officer(officer_id: str, request: Request):
                         "ward_code": row["ward_code"]
                     }
                 else:
-                    return {"valid": False, "message": "Officer ID not found. Access Denied."}
+                    return {"valid": False, "message": "Officer ID not found in selected LGA. Check your LGA and ID."}
     except Exception as e:
         return {"valid": False, "message": f"Validation error: {str(e)}"}
 
@@ -753,7 +756,7 @@ async def logout_dashboard(request: Request, response: Response):
 async def request_otp(request: Request):
     """
     Step 1 of officer auth.
-    Body: { "officer_id": "WARDCODE-PUCODE" }
+    Body: { "officer_id": "WARDCODE-PUCODE", "lg": "Osogbo" }
     Returns: { "status": "sent", "phone_hint": "+234***4567" }
              or { "status": "no_phone", "message": "..." }
     """
@@ -764,16 +767,21 @@ async def request_otp(request: Request):
         raise HTTPException(status_code=400, detail="Invalid JSON")
 
     officer_id = str(body.get("officer_id", "")).strip()[:60]
+    lg         = str(body.get("lg", "")).strip()[:60]
     import re as _re2
     officer_id = _re2.sub(r"[^A-Za-z0-9\-/_ ]", "", officer_id)
+
+    if not lg:
+        raise HTTPException(status_code=400, detail="LGA is required.")
 
     parts = officer_id.split("-", 1)
     if len(parts) != 2:
         raise HTTPException(status_code=400, detail="Invalid officer ID format")
     ward_code, pu_code = parts[0].strip(), parts[1].strip()
 
-    # Check lockout
-    entry = _OTP_STORE.get(officer_id, {})
+    # Check lockout — key includes LGA to prevent cross-LGA lockout bleed
+    otp_key = f"{officer_id}|{lg.lower()}"
+    entry = _OTP_STORE.get(otp_key, {})
     locked_until = entry.get("locked_until", 0)
     if time.time() < locked_until:
         remaining = int(locked_until - time.time())
@@ -782,7 +790,7 @@ async def request_otp(request: Request):
             detail=f"Too many failed attempts. Try again in {remaining // 60}m {remaining % 60}s."
         )
 
-    # Fetch officer record
+    # Fetch officer record — must match ward_code + pu_code + lg
     with get_db() as conn:
         with conn.cursor() as cur:
             cur.execute(
@@ -790,8 +798,9 @@ async def request_otp(request: Request):
                    FROM polling_units
                    WHERE ward_code = ? AND pu_code = ?
                    AND LOWER(state) = 'osun'
+                   AND LOWER(lg) = LOWER(?)
                    LIMIT 1""",
-                (ward_code, pu_code)
+                (ward_code, pu_code, lg)
             )
             row = cur.fetchone()
 
@@ -808,7 +817,7 @@ async def request_otp(request: Request):
 
     # Generate OTP and store
     otp = _generate_otp()
-    _OTP_STORE[officer_id] = {
+    _OTP_STORE[otp_key] = {
         "otp": otp,
         "expiry": time.time() + _OTP_TTL,
         "phone_hint": _mask_phone(phone),
@@ -878,11 +887,13 @@ async def verify_otp(request: Request):
         raise HTTPException(status_code=400, detail="Invalid JSON")
 
     officer_id = str(body.get("officer_id", "")).strip()[:60]
+    lg         = str(body.get("lg", "")).strip()[:60]
     import re as _re3
     officer_id = _re3.sub(r"[^A-Za-z0-9\-/_ ]", "", officer_id)
     given_otp  = str(body.get("otp", "")).strip()[:6]
 
-    entry = _OTP_STORE.get(officer_id)
+    otp_key = f"{officer_id}|{lg.lower()}"
+    entry = _OTP_STORE.get(otp_key)
 
     # No OTP requested
     if not entry:
@@ -902,7 +913,7 @@ async def verify_otp(request: Request):
 
     # Expired
     if time.time() > entry["expiry"]:
-        _OTP_STORE.pop(officer_id, None)
+        _OTP_STORE.pop(otp_key, None)
         raise HTTPException(status_code=400, detail="OTP expired. Request a new one.")
 
     # Wrong OTP — increment attempts
@@ -2304,13 +2315,46 @@ async def vote_form():
 <body>
     <nav class="navbar py-2 mb-4 text-center"><h5>IMOLE YOUTH ACCORD MOBILIZATION OFFICIAL FIELD COLLATION</h5></nav>
     <div class="container pb-5" style="max-width: 850px;">
-        <!-- ── Step 1: Officer ID ── -->
+        <!-- ── Step 1: LGA + Officer ID ── -->
         <div id="step1Area" class="card p-5 text-center mx-auto" style="max-width: 420px;">
             <div style="width:56px;height:56px;border-radius:50%;background:rgba(0,135,81,0.12);border:1px solid rgba(0,135,81,0.3);display:flex;align-items:center;justify-content:center;font-size:1.4rem;margin:0 auto 16px;">🗳️</div>
             <div style="font-size:0.6rem;font-weight:700;letter-spacing:0.15em;color:#ffc107;background:rgba(255,193,7,0.1);border:1px solid rgba(255,193,7,0.2);border-radius:20px;padding:3px 12px;display:inline-block;margin-bottom:14px;text-transform:uppercase;">Step 1 of 2 — Officer Verification</div>
-            <h6 class="fw-bold mb-1">Enter Your Officer ID</h6>
-            <p class="small text-muted mb-3">Your unique WARDCODE-PUCODE assignment</p>
-            <input type="text" id="oid" class="form-control mb-2 text-center fw-bold" placeholder="WARDCODE-PUCODE" autocomplete="off" style="letter-spacing:0.08em;" onkeydown="if(event.key==='Enter')requestOTP()">
+            <h6 class="fw-bold mb-1">Select Your LGA &amp; Enter Officer ID</h6>
+            <p class="small text-muted mb-3">Both fields must match your official assignment</p>
+            <select id="lgaSelect" class="form-select mb-2 text-center fw-bold" style="background:#1a1a1a;color:#fff;border:1px solid rgba(0,135,81,0.4);border-radius:8px;">
+                <option value="">— Select Your LGA —</option>
+                <option value="Atakumosa East">Atakumosa East</option>
+                <option value="Atakumosa West">Atakumosa West</option>
+                <option value="Ayedaade">Ayedaade</option>
+                <option value="Ayedire">Ayedire</option>
+                <option value="Boluwaduro">Boluwaduro</option>
+                <option value="Boripe">Boripe</option>
+                <option value="Ede North">Ede North</option>
+                <option value="Ede South">Ede South</option>
+                <option value="Egbedore">Egbedore</option>
+                <option value="Ejigbo">Ejigbo</option>
+                <option value="Ife Central">Ife Central</option>
+                <option value="Ife East">Ife East</option>
+                <option value="Ife North">Ife North</option>
+                <option value="Ife South">Ife South</option>
+                <option value="Ifedayo">Ifedayo</option>
+                <option value="Ifelodun">Ifelodun</option>
+                <option value="Ila">Ila</option>
+                <option value="Ilesa East">Ilesa East</option>
+                <option value="Ilesa West">Ilesa West</option>
+                <option value="Irepodun">Irepodun</option>
+                <option value="Irewole">Irewole</option>
+                <option value="Isokan">Isokan</option>
+                <option value="Iwo">Iwo</option>
+                <option value="Obokun">Obokun</option>
+                <option value="Odo-Otin">Odo-Otin</option>
+                <option value="Ola-Oluwa">Ola-Oluwa</option>
+                <option value="Olorunda">Olorunda</option>
+                <option value="Oriade">Oriade</option>
+                <option value="Orolu">Orolu</option>
+                <option value="Osogbo">Osogbo</option>
+            </select>
+            <input type="text" id="oid" class="form-control mb-2 text-center fw-bold" placeholder="e.g. 10-001" autocomplete="off" style="letter-spacing:0.08em;" onkeydown="if(event.key==='Enter')requestOTP()">
             <div id="step1Error" class="alert alert-danger d-none small py-2 mb-2"></div>
             <button class="btn btn-success w-100 fw-bold" id="step1Btn" onclick="requestOTP()">Send OTP to My WhatsApp →</button>
         </div>
@@ -2420,12 +2464,19 @@ async def vote_form():
     <script src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/js/bootstrap.bundle.min.js"></script>
 
     <script>
-        let lat = null, lon = null, officerId, submitToken = null, pendingPayload = null;
+        let lat = null, lon = null, officerId, officerLga = '', submitToken = null, pendingPayload = null;
         let _resendTimer = null;
 
         // ── Step 1: request OTP ──────────────────────────────────────────────
         async function requestOTP() {{
             const rawId = document.getElementById('oid').value.trim().toUpperCase();
+            const lga   = document.getElementById('lgaSelect').value;
+            if (!lga) {{
+                const errEl = document.getElementById('step1Error');
+                errEl.innerText = 'Please select your LGA first.';
+                errEl.classList.remove('d-none');
+                return;
+            }}
             if (!rawId) return;
             const btn  = document.getElementById('step1Btn');
             const errEl = document.getElementById('step1Error');
@@ -2435,7 +2486,7 @@ async def vote_form():
                 const res = await fetch('/api/request-otp', {{
                     method: 'POST',
                     headers: {{'Content-Type': 'application/json'}},
-                    body: JSON.stringify({{ officer_id: rawId }})
+                    body: JSON.stringify({{ officer_id: rawId, lg: lga }})
                 }});
                 const out = await res.json();
                 if (!res.ok) {{
@@ -2452,6 +2503,7 @@ async def vote_form():
                 }}
                 // OTP sent — move to step 2
                 officerId = rawId;
+                officerLga = lga;
                 document.getElementById('phoneHintDisplay').innerText = out.phone_hint;
                 document.getElementById('step1Area').classList.add('d-none');
                 document.getElementById('step2Area').classList.remove('d-none');
@@ -2476,7 +2528,7 @@ async def vote_form():
                 const res = await fetch('/api/verify-otp', {{
                     method: 'POST',
                     headers: {{'Content-Type': 'application/json'}},
-                    body: JSON.stringify({{ officer_id: officerId, otp }})
+                    body: JSON.stringify({{ officer_id: officerId, lg: officerLga, otp }})
                 }});
                 const out = await res.json();
                 if (!res.ok) {{
@@ -2523,6 +2575,8 @@ async def vote_form():
             document.getElementById('step1Btn').disabled = false;
             document.getElementById('step1Btn').innerText = 'Send OTP to My WhatsApp →';
             document.getElementById('step1Error').classList.add('d-none');
+            document.getElementById('otpInput').value = '';
+            officerLga = '';
         }}
 
         function startResendCountdown(seconds) {{
