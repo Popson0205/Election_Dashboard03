@@ -190,22 +190,22 @@ def _mask_phone(phone: str) -> str:
 
 def _clean_phone(p: str) -> str:
     """Normalize Nigerian phone numbers to E.164 format (+234XXXXXXXXXX).
-    Handles: 0812..., 234812..., +234812..., spaces/dashes.
+    Strips ALL non-digit chars first, then rebuilds E.164 — handles stray
+    plus signs mid-string, spaces, dashes, and any other garbage.
     """
     import re as _re
-    p = _re.sub(r"[^+0-9]", "", str(p).strip())
-    if not p:
+    digits = _re.sub(r"[^0-9]", "", str(p).strip())
+    if not digits:
         return ""
-    if p.startswith("+"):
-        return p  # already E.164
-    if p.startswith("234"):
-        return "+" + p
-    if p.startswith("0"):
-        return "+234" + p[1:]
-    # bare 10-digit number without leading zero e.g. 8012345678
-    if len(p) == 10:
-        return "+234" + p
-    return "+" + p  # best-effort
+    if digits.startswith("234") and len(digits) == 13:
+        return "+" + digits          # 2348012345678  -> +2348012345678
+    if digits.startswith("0") and len(digits) == 11:
+        return "+234" + digits[1:]   # 08012345678    -> +2348012345678
+    if len(digits) == 10:
+        return "+234" + digits       # 8012345678     -> +2348012345678
+    if digits.startswith("234"):
+        return "+" + digits          # any other 234X -> +234X
+    return "+" + digits              # best-effort
 
 def _make_submit_token(officer_id: str) -> str:
     """Short-lived signed token that authorises one submission."""
