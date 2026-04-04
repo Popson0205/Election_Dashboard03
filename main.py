@@ -628,7 +628,7 @@ HOMEPAGE_HTML = """
             --green: #008751;
             --green-light: #00b368;
             --gold: #ffc107;
-            --dark: #030a05;
+            --dark: #020c06;
             --panel: rgba(255,255,255,0.04);
             --border: rgba(255,255,255,0.08);
         }
@@ -641,23 +641,50 @@ HOMEPAGE_HTML = """
             overflow-x: hidden;
         }
 
+        /* ── Multi-layer background ── */
+        body::before {
+            content: '';
+            position: fixed;
+            inset: 0;
+            z-index: 0;
+            background:
+                radial-gradient(ellipse 120% 80% at 50% -10%, rgba(0,135,81,0.18) 0%, transparent 60%),
+                radial-gradient(ellipse 80% 60% at 80% 100%, rgba(0,80,40,0.15) 0%, transparent 55%),
+                radial-gradient(ellipse 60% 50% at 10% 80%, rgba(255,193,7,0.04) 0%, transparent 50%),
+                linear-gradient(160deg, #020c06 0%, #041508 40%, #020c06 100%);
+            pointer-events: none;
+        }
+
         /* ── Animated canvas background ── */
         #bg-canvas {
             position: fixed;
             inset: 0;
-            z-index: 0;
-            opacity: 0.55;
+            z-index: 1;
+            opacity: 0.65;
         }
 
-        /* ── Grid overlay ── */
+        /* ── Precision grid overlay ── */
         .grid-overlay {
             position: fixed;
             inset: 0;
-            z-index: 1;
+            z-index: 2;
             background-image:
-                linear-gradient(rgba(0,135,81,0.04) 1px, transparent 1px),
-                linear-gradient(90deg, rgba(0,135,81,0.04) 1px, transparent 1px);
-            background-size: 60px 60px;
+                linear-gradient(rgba(0,135,81,0.06) 1px, transparent 1px),
+                linear-gradient(90deg, rgba(0,135,81,0.06) 1px, transparent 1px),
+                linear-gradient(rgba(0,135,81,0.02) 1px, transparent 1px),
+                linear-gradient(90deg, rgba(0,135,81,0.02) 1px, transparent 1px);
+            background-size: 80px 80px, 80px 80px, 20px 20px, 20px 20px;
+            pointer-events: none;
+        }
+
+        /* ── Corner accent lines ── */
+        .grid-overlay::before {
+            content: '';
+            position: absolute;
+            inset: 0;
+            background:
+                linear-gradient(135deg, rgba(0,135,81,0.12) 0%, transparent 30%),
+                linear-gradient(315deg, rgba(255,193,7,0.05) 0%, transparent 30%);
             pointer-events: none;
         }
 
@@ -666,10 +693,25 @@ HOMEPAGE_HTML = """
             position: fixed;
             top: 50%; left: 50%;
             transform: translate(-50%, -50%);
-            width: 900px; height: 900px;
-            background: radial-gradient(circle, rgba(0,135,81,0.12) 0%, transparent 70%);
-            z-index: 1;
+            width: 1100px; height: 1100px;
+            background: radial-gradient(circle, rgba(0,135,81,0.14) 0%, rgba(0,60,30,0.06) 40%, transparent 70%);
+            z-index: 2;
             pointer-events: none;
+        }
+
+        /* ── Top scan line ── */
+        .scan-line {
+            position: fixed;
+            top: 0; left: 0; right: 0;
+            height: 2px;
+            background: linear-gradient(90deg, transparent, rgba(0,135,81,0.6), rgba(255,193,7,0.4), rgba(0,135,81,0.6), transparent);
+            z-index: 3;
+            animation: scan 4s ease-in-out infinite;
+        }
+
+        @keyframes scan {
+            0%, 100% { opacity: 0.4; transform: scaleX(0.8); }
+            50% { opacity: 1; transform: scaleX(1); }
         }
 
         /* ── Main layout ── */
@@ -986,6 +1028,7 @@ HOMEPAGE_HTML = """
 </head>
 <body>
 
+<div class="scan-line"></div>
 <canvas id="bg-canvas"></canvas>
 <div class="grid-overlay"></div>
 <div class="glow-center"></div>
@@ -1087,54 +1130,86 @@ HOMEPAGE_HTML = """
 </div>
 
 <script>
-// ── Particle field canvas animation ──────────────────────────────────────────
+// ── Enhanced particle + ring canvas animation ────────────────────────────────
 (function() {
     const canvas = document.getElementById('bg-canvas');
     const ctx = canvas.getContext('2d');
-    let W, H, particles = [], lines = [];
-    const COUNT = 80;
+    let W, H, particles = [];
+    let rings = [
+        { r: 0, maxR: 0, alpha: 0, speed: 0.6 },
+        { r: 0, maxR: 0, alpha: 0, speed: 0.4 },
+        { r: 0, maxR: 0, alpha: 0, speed: 0.5 }
+    ];
+    let ringTimer = 0;
+    const COUNT = 90;
     const GREEN = '0,135,81';
     const GOLD  = '255,193,7';
+    const TEAL  = '0,179,104';
 
     function resize() {
         W = canvas.width  = window.innerWidth;
         H = canvas.height = window.innerHeight;
+        rings.forEach((r, i) => { r.maxR = Math.max(W, H) * 0.7; });
     }
 
     function Particle() {
         this.reset = function() {
             this.x  = Math.random() * W;
             this.y  = Math.random() * H;
-            this.vx = (Math.random() - 0.5) * 0.4;
-            this.vy = (Math.random() - 0.5) * 0.4;
-            this.r  = Math.random() * 1.8 + 0.4;
-            this.color = Math.random() > 0.85 ? GOLD : GREEN;
-            this.alpha = Math.random() * 0.6 + 0.2;
+            this.vx = (Math.random() - 0.5) * 0.35;
+            this.vy = (Math.random() - 0.5) * 0.35;
+            this.r  = Math.random() * 2 + 0.3;
+            const rnd = Math.random();
+            this.color = rnd > 0.92 ? GOLD : rnd > 0.75 ? TEAL : GREEN;
+            this.alpha = Math.random() * 0.55 + 0.15;
+            this.pulse = Math.random() * Math.PI * 2;
         };
         this.reset();
     }
 
+    function spawnRing() {
+        const inactive = rings.find(r => r.alpha <= 0);
+        if (!inactive) return;
+        inactive.r = 0;
+        inactive.alpha = 0.35;
+        inactive.cx = W * 0.5 + (Math.random() - 0.5) * W * 0.3;
+        inactive.cy = H * 0.5 + (Math.random() - 0.5) * H * 0.3;
+    }
+
     function init() {
         particles = [];
-        for (let i = 0; i < COUNT; i++) {
-            particles.push(new Particle());
-        }
+        for (let i = 0; i < COUNT; i++) particles.push(new Particle());
     }
 
     function draw() {
         ctx.clearRect(0, 0, W, H);
+        ringTimer++;
+        if (ringTimer % 180 === 0) spawnRing();
 
-        // Draw connecting lines between nearby particles
+        // Draw expanding rings
+        rings.forEach(ring => {
+            if (ring.alpha <= 0) return;
+            ring.r += ring.speed;
+            ring.alpha -= 0.001;
+            if (ring.r > ring.maxR) { ring.alpha = 0; return; }
+            ctx.beginPath();
+            ctx.arc(ring.cx || W/2, ring.cy || H/2, ring.r, 0, Math.PI * 2);
+            ctx.strokeStyle = `rgba(${GREEN},${ring.alpha * 0.5})`;
+            ctx.lineWidth = 1;
+            ctx.stroke();
+        });
+
+        // Connecting lines
         for (let i = 0; i < particles.length; i++) {
             for (let j = i + 1; j < particles.length; j++) {
                 const dx = particles[i].x - particles[j].x;
                 const dy = particles[i].y - particles[j].y;
                 const dist = Math.sqrt(dx*dx + dy*dy);
-                if (dist < 130) {
-                    const alpha = (1 - dist / 130) * 0.18;
+                if (dist < 120) {
+                    const alpha = (1 - dist / 120) * 0.15;
                     ctx.beginPath();
                     ctx.strokeStyle = `rgba(${GREEN},${alpha})`;
-                    ctx.lineWidth = 0.6;
+                    ctx.lineWidth = 0.5;
                     ctx.moveTo(particles[i].x, particles[i].y);
                     ctx.lineTo(particles[j].x, particles[j].y);
                     ctx.stroke();
@@ -1142,16 +1217,15 @@ HOMEPAGE_HTML = """
             }
         }
 
-        // Draw particles
+        // Particles with subtle pulse
         particles.forEach(p => {
+            p.pulse += 0.02;
+            const pr = p.r + Math.sin(p.pulse) * 0.4;
             ctx.beginPath();
-            ctx.arc(p.x, p.y, p.r, 0, Math.PI * 2);
+            ctx.arc(p.x, p.y, pr, 0, Math.PI * 2);
             ctx.fillStyle = `rgba(${p.color},${p.alpha})`;
             ctx.fill();
-
-            p.x += p.vx;
-            p.y += p.vy;
-
+            p.x += p.vx; p.y += p.vy;
             if (p.x < -10) p.x = W + 10;
             if (p.x > W + 10) p.x = -10;
             if (p.y < -10) p.y = H + 10;
@@ -1164,6 +1238,7 @@ HOMEPAGE_HTML = """
     window.addEventListener('resize', () => { resize(); init(); });
     resize();
     init();
+    spawnRing();
     draw();
 })();
 </script>
@@ -1273,7 +1348,6 @@ async def vote_form():
                     <div class="col-6"><small class="text-muted">Polling Unit</small><input type="text" id="loc" class="form-control" readonly></div>
                 </div>
             </div>
-            </div>
 
             <div class="card p-4">
                 <span class="section-label">2. Official 14-Party Scorecard — 2026 Ọàsun Governorship</span>
@@ -1317,6 +1391,8 @@ async def vote_form():
         </div>
     </div>
 
+        </div><!-- /formArea -->
+    </div>
     <!-- Confirmation Modal -->
     <div class="modal fade" id="confirmModal" tabindex="-1">
       <div class="modal-dialog modal-dialog-centered">
