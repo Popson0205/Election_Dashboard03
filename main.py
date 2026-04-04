@@ -1401,21 +1401,27 @@ function rLogout() {
 
 async function loadSummaryStats() {
     try {
-        const res = await fetch('/api/admin/pending-review-count', { credentials: 'include' });
+        const res = await fetch('/api/admin/pending-review-count', {
+            headers: { 'Authorization': 'Bearer ' + _rKey },
+            credentials: 'include'
+        });
         if (!res.ok) return;
         const d = await res.json();
-        document.getElementById('rStatTotal').textContent   = d.total.toLocaleString();
-        document.getElementById('rStatPending').textContent = d.pending.toLocaleString();
+        document.getElementById('rStatTotal').textContent    = d.total.toLocaleString();
+        document.getElementById('rStatPending').textContent  = d.pending.toLocaleString();
         document.getElementById('rStatApproved').textContent = (d.total - d.pending).toLocaleString();
     } catch(e) {}
 }
 
 async function loadLgas() {
     try {
-        const res = await fetch('/api/lgas/osun', { credentials: 'include' });
+        // /api/lgas/osun requires no auth — returns plain string array
+        const res = await fetch('/api/lgas/osun');
+        if (!res.ok) return;
         const d = await res.json();
         const sel = document.getElementById('rFilterLga');
-        (d.lgas || d).forEach(l => {
+        const items = Array.isArray(d) ? d : (d.lgas || []);
+        items.forEach(l => {
             const o = document.createElement('option');
             o.value = typeof l === 'string' ? l : l.lg;
             o.textContent = typeof l === 'string' ? l : l.lg;
@@ -1722,6 +1728,10 @@ ADMIN_HTML = """
         .btn-del  { border-color: rgba(255,107,107,0.4); color: #ff6b6b; }
         .btn-save { border-color: rgba(0,179,104,0.6); color: #00cc66; background: rgba(0,135,81,0.15); }
         .btn-cancel { border-color: rgba(255,193,7,0.4); color: #ffc107; }
+        .btn-filter { background: rgba(255,255,255,0.04); border: 1px solid rgba(255,255,255,0.1); border-radius: 20px; color: rgba(255,255,255,0.5); cursor: pointer; font-size: 0.7rem; padding: 4px 12px; transition: all 0.15s; }
+        .btn-filter:hover { background: rgba(255,255,255,0.08); color: #fff; }
+        .btn-filter.active { background: rgba(0,135,81,0.2); border-color: rgba(0,135,81,0.5); color: #00cc66; font-weight: 700; }
+        .phone-missing { color: rgba(255,255,255,0.25); font-style: italic; font-size: 0.72rem; }
         td { padding: 7px 12px; color: rgba(255,255,255,0.75); }
         td.valid { color: #00cc66; }
         td.invalid { color: #ff6b6b; }
@@ -1849,17 +1859,22 @@ ADMIN_HTML = """
 
 </div>
 
-    <!-- ── Registered Officers Table ── -->
+    <!-- ── All Officers Table ── -->
     <div class="card" id="officerTableCard" style="margin-top:24px;">
-        <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:14px;flex-wrap:wrap;gap:10px;">
-            <span class="card-title" style="margin-bottom:0;">📋 Registered Officers</span>
-            <input type="text" id="officerSearch" placeholder="Search officer ID, LGA, phone..." onkeyup="loadOfficerTable(1, this.value)"
-                   style="background:rgba(255,255,255,0.06);border:1px solid rgba(255,255,255,0.12);border-radius:8px;color:#fff;padding:6px 12px;font-size:0.78rem;width:260px;">
+        <div style="display:flex;justify-content:space-between;align-items:flex-start;margin-bottom:14px;flex-wrap:wrap;gap:10px;">
+            <span class="card-title" style="margin-bottom:0;">📋 Officer Management</span>
+            <input type="text" id="officerSearch" placeholder="Search ID, LGA, ward, phone..." onkeyup="loadOfficerTable(1, undefined, this.value)"
+                   style="background:rgba(255,255,255,0.06);border:1px solid rgba(255,255,255,0.12);border-radius:8px;color:#fff;padding:6px 12px;font-size:0.78rem;width:240px;">
         </div>
-        <div class="preview-wrap" style="max-height:420px;overflow-y:auto;">
+        <div style="display:flex;gap:8px;margin-bottom:12px;">
+            <button class="btn-filter active" id="fAll"          onclick="setOfficerFilter('all')">All</button>
+            <button class="btn-filter"        id="fRegistered"   onclick="setOfficerFilter('registered')">✅ Registered</button>
+            <button class="btn-filter"        id="fUnregistered" onclick="setOfficerFilter('unregistered')">⚠️ No Phone</button>
+        </div>
+        <div class="preview-wrap" style="max-height:460px;overflow-y:auto;">
             <table style="width:100%;border-collapse:collapse;">
                 <thead>
-                    <tr style="font-size:0.7rem;color:rgba(255,255,255,0.4);text-transform:uppercase;letter-spacing:0.08em;border-bottom:1px solid rgba(255,255,255,0.08);">
+                    <tr style="font-size:0.68rem;color:rgba(255,255,255,0.4);text-transform:uppercase;letter-spacing:0.08em;border-bottom:1px solid rgba(255,255,255,0.08);">
                         <th style="padding:8px 6px;text-align:left;">Officer ID</th>
                         <th style="padding:8px 6px;text-align:left;">LGA</th>
                         <th style="padding:8px 6px;text-align:left;">Ward</th>
@@ -1869,11 +1884,11 @@ ADMIN_HTML = """
                     </tr>
                 </thead>
                 <tbody id="officerTableBody">
-                    <tr><td colspan="6" style="text-align:center;padding:20px;color:rgba(255,255,255,0.3);">Login to view registered officers.</td></tr>
+                    <tr><td colspan="6" style="text-align:center;padding:20px;color:rgba(255,255,255,0.3);">Login to manage officers.</td></tr>
                 </tbody>
             </table>
         </div>
-        <div id="officerTableInfo" style="margin-top:10px;font-size:0.72rem;color:rgba(255,255,255,0.4);"></div>
+        <div id="officerTableInfo" style="margin-top:10px;font-size:0.72rem;color:rgba(255,255,255,0.4);display:flex;align-items:center;gap:10px;"></div>
     </div>
 
 </div>
@@ -2140,60 +2155,77 @@ ADMIN_HTML = """
         document.getElementById('adminKey').focus();
     });
 
-    // ── Registered Officers Table ────────────────────────────────────────────
-    let _officerPage = 1, _officerQ = '';
+    // ── Officer Management Table ─────────────────────────────────────────────
+    let _officerPage = 1, _officerQ = '', _officerFilter = 'all';
 
-    async function loadOfficerTable(page, q) {
-        _officerPage = page || 1;
-        _officerQ    = (q !== undefined) ? q : _officerQ;
+    function setOfficerFilter(f) {
+        _officerFilter = f;
+        ['All','Registered','Unregistered'].forEach(n => {
+            const el = document.getElementById('f' + n);
+            if (el) el.classList.toggle('active', n.toLowerCase() === f || (f === 'all' && n === 'All'));
+        });
+        loadOfficerTable(1);
+    }
+
+    async function loadOfficerTable(page, filter, q) {
+        _officerPage   = page  !== undefined ? page  : _officerPage;
+        _officerFilter = filter !== undefined ? filter : _officerFilter;
+        _officerQ      = q    !== undefined ? q    : _officerQ;
         const tbl  = document.getElementById('officerTableBody');
         const info = document.getElementById('officerTableInfo');
         if (!tbl) return;
         tbl.innerHTML = '<tr><td colspan="6" style="text-align:center;padding:20px;color:rgba(255,255,255,0.3);">Loading...</td></tr>';
         try {
-            const res = await fetch(`/api/admin/list-officers?page=${_officerPage}&q=${encodeURIComponent(_officerQ)}`, {
-                headers: { 'Authorization': 'Bearer ' + _adminKey }
-            });
-            const d = await res.json();
+            const url = `/api/admin/list-officers?page=${_officerPage}&q=${encodeURIComponent(_officerQ)}&filter=${_officerFilter}`;
+            const res = await fetch(url, { headers: { 'Authorization': 'Bearer ' + _adminKey } });
+            const d   = await res.json();
             if (!d.officers || !d.officers.length) {
-                tbl.innerHTML = '<tr><td colspan="6" style="text-align:center;padding:20px;color:rgba(255,255,255,0.3);">No registered officers found.</td></tr>';
-                if (info) info.textContent = '';
+                tbl.innerHTML = '<tr><td colspan="6" style="text-align:center;padding:20px;color:rgba(255,255,255,0.3);">No officers found.</td></tr>';
+                if (info) info.innerHTML = '';
                 return;
             }
-            tbl.innerHTML = d.officers.map(o => `
-                <tr id="orow-${o.ward_code}-${o.pu_code}">
-                    <td style="font-weight:700;color:#ffc107;">${o.ward_code}-${o.pu_code}</td>
-                    <td style="font-size:0.75rem;color:rgba(255,255,255,0.6);">${o.lg || '—'}</td>
-                    <td style="font-size:0.72rem;color:rgba(255,255,255,0.5);">${o.ward || '—'}</td>
-                    <td style="font-size:0.7rem;color:rgba(255,255,255,0.4);max-width:140px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;" title="${o.location||''}">${o.location || '—'}</td>
-                    <td id="phone-${o.ward_code}-${o.pu_code}" style="color:#00cc66;font-weight:600;">${o.officer_phone || '—'}</td>
-                    <td style="white-space:nowrap;">
-                        <button class="btn-action btn-edit" onclick="editOfficerRow('${o.ward_code}','${o.pu_code}','${o.officer_phone||''}')">✏️ Edit</button>
-                        <button class="btn-action btn-del" onclick="deleteOfficer('${o.ward_code}','${o.pu_code}')">🗑 Delete</button>
-                    </td>
-                </tr>`).join('');
+            tbl.innerHTML = d.officers.map(o => {
+                const hasPhone = o.officer_phone && o.officer_phone.trim();
+                const phoneDisplay = hasPhone
+                    ? `<span style="color:#00cc66;font-weight:600;">${o.officer_phone}</span>`
+                    : `<span class="phone-missing">— no phone</span>`;
+                const actions = `
+                    <button class="btn-action btn-edit" onclick="editOfficerRow('${o.ward_code}','${o.pu_code}','${o.officer_phone||''}')">✏️ Edit</button>
+                    ${hasPhone ? `<button class="btn-action btn-del" onclick="deleteOfficer('${o.ward_code}','${o.pu_code}')">🗑 Remove</button>` : ''}`;
+                return `<tr id="orow-${o.ward_code}-${o.pu_code}">
+                    <td style="font-weight:700;color:#ffc107;white-space:nowrap;">${o.ward_code}-${o.pu_code}</td>
+                    <td style="font-size:0.74rem;color:rgba(255,255,255,0.6);">${o.lg||'—'}</td>
+                    <td style="font-size:0.7rem;color:rgba(255,255,255,0.5);">${o.ward||'—'}</td>
+                    <td style="font-size:0.68rem;color:rgba(255,255,255,0.4);max-width:130px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;" title="${o.location||''}">${o.location||'—'}</td>
+                    <td id="phone-${o.ward_code}-${o.pu_code}">${phoneDisplay}</td>
+                    <td style="white-space:nowrap;">${actions}</td>
+                </tr>`;
+            }).join('');
             if (info) info.innerHTML =
-                `Showing page ${d.page} of ${d.pages} &nbsp;·&nbsp; ${d.total.toLocaleString()} registered` +
-                (d.pages > 1 ? ` &nbsp; <button class="btn-action" onclick="loadOfficerTable(${_officerPage-1})" ${_officerPage<=1?'disabled':''}>◀</button>` +
-                               ` <button class="btn-action" onclick="loadOfficerTable(${_officerPage+1})" ${_officerPage>=d.pages?'disabled':''}>▶</button>` : '');
+                `<span>Page ${d.page} of ${d.pages} &nbsp;·&nbsp; ${d.total.toLocaleString()} officers</span>` +
+                (d.pages > 1 ? `<button class="btn-action" onclick="loadOfficerTable(${_officerPage-1})" ${_officerPage<=1?'disabled':''}>◀</button>` +
+                               `<button class="btn-action" onclick="loadOfficerTable(${_officerPage+1})" ${_officerPage>=d.pages?'disabled':''}>▶</button>` : '');
         } catch(e) {
             tbl.innerHTML = '<tr><td colspan="6" style="color:#ff6b6b;text-align:center;padding:16px;">Failed to load officers.</td></tr>';
         }
     }
 
     function editOfficerRow(wardCode, puCode, currentPhone) {
-        const phoneCell = document.getElementById(`phone-${wardCode}-${puCode}`);
-        const row = document.getElementById(`orow-${wardCode}-${puCode}`);
+        const phoneCell  = document.getElementById(`phone-${wardCode}-${puCode}`);
+        const row        = document.getElementById(`orow-${wardCode}-${puCode}`);
         const actionCell = row.querySelector('td:last-child');
-        phoneCell.innerHTML = `<input type="text" id="edit-phone-${wardCode}-${puCode}" value="${currentPhone}" style="background:rgba(255,255,255,0.08);border:1px solid rgba(0,135,81,0.5);border-radius:6px;color:#fff;padding:4px 8px;width:160px;font-size:0.8rem;">`;
+        phoneCell.innerHTML = `<input type="text" id="ep-${wardCode}-${puCode}" value="${currentPhone}"
+            placeholder="+2348012345678"
+            style="background:rgba(255,255,255,0.08);border:1px solid rgba(0,135,81,0.5);border-radius:6px;color:#fff;padding:4px 8px;width:155px;font-size:0.78rem;"
+            onkeydown="if(event.key==='Enter')saveOfficerEdit('${wardCode}','${puCode}');if(event.key==='Escape')loadOfficerTable();">`;
         actionCell.innerHTML = `
-            <button class="btn-action btn-save" onclick="saveOfficerEdit('${wardCode}','${puCode}')">💾 Save</button>
-            <button class="btn-action btn-cancel" onclick="loadOfficerTable()">✕ Cancel</button>`;
-        document.getElementById(`edit-phone-${wardCode}-${puCode}`).focus();
+            <button class="btn-action btn-save"   onclick="saveOfficerEdit('${wardCode}','${puCode}')">💾 Save</button>
+            <button class="btn-action btn-cancel" onclick="loadOfficerTable()">✕</button>`;
+        document.getElementById(`ep-${wardCode}-${puCode}`).focus();
     }
 
     async function saveOfficerEdit(wardCode, puCode) {
-        const phone = document.getElementById(`edit-phone-${wardCode}-${puCode}`).value.trim();
+        const phone = document.getElementById(`ep-${wardCode}-${puCode}`).value.trim();
         try {
             const res = await fetch('/api/admin/update-officer', {
                 method: 'PUT',
@@ -2208,7 +2240,7 @@ ADMIN_HTML = """
     }
 
     async function deleteOfficer(wardCode, puCode) {
-        if (!confirm(`Remove phone for officer ${wardCode}-${puCode}? This will prevent them from logging in via OTP.`)) return;
+        if (!confirm(`Remove phone for ${wardCode}-${puCode}? Officer will not be able to log in via OTP.`)) return;
         try {
             const res = await fetch('/api/admin/delete-officer', {
                 method: 'DELETE',
@@ -2226,7 +2258,7 @@ ADMIN_HTML = """
     const _origLoadStats = loadStats;
     async function loadStats() {
         await _origLoadStats();
-        if (_adminKey) loadOfficerTable(1, '');
+        if (_adminKey) loadOfficerTable(1, 'all', '');
     }
 </script>
 </body>
@@ -2237,7 +2269,10 @@ ADMIN_HTML = """
 
 # ── Admin: list registered officers (with phone) ──────────────────────────────
 @app.get("/api/admin/list-officers")
-async def list_officers(request: Request, page: int = 1, q: str = ""):
+async def list_officers(request: Request, page: int = 1, q: str = "", filter: str = "all"):
+    """
+    filter: all | registered | unregistered
+    """
     auth = request.headers.get("Authorization", "")
     token = request.cookies.get("ds_session")
     if not (auth.startswith("Bearer ") and secrets.compare_digest(
@@ -2246,26 +2281,26 @@ async def list_officers(request: Request, page: int = 1, q: str = ""):
         raise HTTPException(status_code=403, detail="Not authorised")
     PAGE_SIZE = 50
     offset = (page - 1) * PAGE_SIZE
+    conditions = ["LOWER(state)='osun'"]
+    params_q = []
+    if filter == "registered":
+        conditions.append("officer_phone IS NOT NULL AND officer_phone != ''")
+    elif filter == "unregistered":
+        conditions.append("(officer_phone IS NULL OR officer_phone = '')")
+    if q:
+        like = f"%{q}%"
+        conditions.append("(ward_code LIKE ? OR pu_code LIKE ? OR LOWER(lg) LIKE ? OR LOWER(ward) LIKE ? OR officer_phone LIKE ?)")
+        params_q = [like, like, like.lower(), like.lower(), like]
+    where = "WHERE " + " AND ".join(conditions)
     with get_db() as conn:
         with conn.cursor() as cur:
-            if q:
-                like = f"%{q}%"
-                cur.execute("""SELECT ward_code, pu_code, lg, ward, location, officer_phone
-                               FROM polling_units
-                               WHERE LOWER(state)='osun' AND officer_phone IS NOT NULL AND officer_phone != ''
-                               AND (ward_code LIKE ? OR pu_code LIKE ? OR LOWER(lg) LIKE ? OR officer_phone LIKE ?)
-                               ORDER BY ward_code, pu_code LIMIT ? OFFSET ?""",
-                            (like, like, like.lower(), like, PAGE_SIZE, offset))
-            else:
-                cur.execute("""SELECT ward_code, pu_code, lg, ward, location, officer_phone
-                               FROM polling_units
-                               WHERE LOWER(state)='osun' AND officer_phone IS NOT NULL AND officer_phone != ''
-                               ORDER BY ward_code, pu_code LIMIT ? OFFSET ?""",
-                            (PAGE_SIZE, offset))
-            rows = cur.fetchall()
-            cur.execute("""SELECT COUNT(*) as c FROM polling_units
-                           WHERE LOWER(state)='osun' AND officer_phone IS NOT NULL AND officer_phone != ''""")
+            cur.execute(f"SELECT COUNT(*) as c FROM polling_units {where}", params_q)
             total = cur.fetchone()["c"]
+            cur.execute(f"""SELECT ward_code, pu_code, lg, ward, location, officer_phone
+                           FROM polling_units {where}
+                           ORDER BY lg, ward_code, pu_code LIMIT ? OFFSET ?""",
+                        params_q + [PAGE_SIZE, offset])
+            rows = cur.fetchall()
     return {
         "officers": [dict(r) for r in rows],
         "total": total,
@@ -2359,6 +2394,19 @@ async def admin_list_results(request: Request, page: int = 1, lga: str = "", sta
     where = ("WHERE " + " AND ".join(filters)) if filters else ""
     with get_db() as conn:
         with conn.cursor() as cur:
+            # Run safe migrations inline so missing columns never cause a 500
+            for _col in [
+                "reviewed INTEGER DEFAULT 0",
+                "reviewed_by TEXT",
+                "reviewed_at TEXT",
+                "edited_votes_json TEXT",
+                "edit_note TEXT",
+            ]:
+                try:
+                    cur.execute(f"ALTER TABLE field_submissions ADD COLUMN {_col}")
+                    conn._conn.commit()
+                except Exception:
+                    pass
             cur.execute(f"SELECT COUNT(*) as c FROM field_submissions {where}", params)
             total = cur.fetchone()["c"]
             cur.execute(f"""SELECT id, officer_id, state, lg, ward, ward_code, pu_code, location,
@@ -2371,7 +2419,7 @@ async def admin_list_results(request: Request, page: int = 1, lga: str = "", sta
             rows = cur.fetchall()
     results = []
     for r in rows:
-        votes = json.loads(r["edited_votes_json"] or r["votes_json"] or "{}")
+        votes = json.loads(r.get("edited_votes_json") or r.get("votes_json") or "{}")
         results.append({
             "id": r["id"],
             "officer_id": r["officer_id"],
@@ -2498,7 +2546,13 @@ async def admin_approve_result(submission_id: int, request: Request):
 # ── Admin: pending review count (for dashboard badge) ────────────────────────
 @app.get("/api/admin/pending-review-count")
 async def pending_review_count(request: Request):
-    _require_dashboard(request)
+    auth  = request.headers.get("Authorization", "")
+    token = request.cookies.get("ds_session")
+    bearer_ok = auth.startswith("Bearer ") and secrets.compare_digest(
+        hashlib.sha256(auth.split(" ", 1)[1].strip().encode()).hexdigest(), _DASHBOARD_KEY_HASH
+    )
+    if not bearer_ok and not _is_valid_token(token):
+        raise HTTPException(status_code=403, detail="Not authorised")
     with get_db() as conn:
         with conn.cursor() as cur:
             cur.execute("SELECT COUNT(*) as c FROM field_submissions WHERE reviewed=0 OR reviewed IS NULL")
