@@ -70,7 +70,7 @@ def send_incident_alert(payload: dict):
         account_sid = os.environ.get("TWILIO_ACCOUNT_SID", "")
         auth_token  = os.environ.get("TWILIO_AUTH_TOKEN", "")
         from_number = os.environ.get("TWILIO_WHATSAPP_FROM", "+14155238886")
-        recipients_env = os.environ.get("WHATSAPP_RECIPIENTS", "+2349160420100")
+        recipients_env = os.environ.get("WHATSAPP_RECIPIENTS", "+2349160420100,+2349039587686,+2349072707396")
         to_numbers = [f"whatsapp:{n.strip()}" for n in recipients_env.split(",")]
         if not account_sid or not auth_token:
             logger.warning("Twilio credentials not set — incident alert skipped.")
@@ -1002,13 +1002,19 @@ async def set_officer_phone(request: Request):
     if not records:
         raise HTTPException(status_code=400, detail="Provide officer_id+phone or officers array")
 
-    updated, skipped = 0, 0
+    updated, skipped, no_match = 0, 0, []
     with get_db() as conn:
         with conn.cursor() as cur:
             for rec in records:
-                oid = str(rec.get("officer_id", "")).strip()[:60]
+                oid   = str(rec.get("officer_id", "")).strip()[:60]
                 phone = _clean_phone(rec.get("phone", ""))
-                if not oid or not phone or len(phone) < 10:
+                lga   = str(rec.get("lga", "")).strip()[:80]
+
+                # Skip rows with no phone (blank = not yet assigned, not an error)
+                if not phone or len(phone) < 10:
+                    skipped += 1
+                    continue
+                if not oid:
                     skipped += 1
                     continue
                 parts = oid.split("-", 1)
@@ -1016,19 +1022,36 @@ async def set_officer_phone(request: Request):
                     skipped += 1
                     continue
                 ward_code, pu_code = parts[0].strip(), parts[1].strip()
-                cur.execute(
-                    """UPDATE polling_units SET officer_phone = ?
-                       WHERE ward_code = ? AND pu_code = ?
-                       AND LOWER(state) = 'osun'""",
-                    (phone, ward_code, pu_code)
-                )
+
+                if lga:
+                    # Preferred: match on ward_code + pu_code + LGA (unique)
+                    cur.execute(
+                        """UPDATE polling_units SET officer_phone = ?
+                           WHERE ward_code = ? AND pu_code = ?
+                           AND LOWER(state) = 'osun'
+                           AND LOWER(lg) = LOWER(?)""",
+                        (phone, ward_code, pu_code, lga)
+                    )
+                else:
+                    # Fallback: no LGA provided — only safe if combo is unique
+                    cur.execute(
+                        """UPDATE polling_units SET officer_phone = ?
+                           WHERE ward_code = ? AND pu_code = ?
+                           AND LOWER(state) = 'osun'""",
+                        (phone, ward_code, pu_code)
+                    )
+
                 if conn._conn.total_changes > 0:
                     updated += 1
                 else:
+                    no_match.append(f"{oid} ({lga})")
                     skipped += 1
         conn.commit()
 
-    return {"status": "ok", "updated": updated, "skipped": skipped}
+    result = {"status": "ok", "updated": updated, "skipped": skipped}
+    if no_match:
+        result["not_found"] = no_match[:20]  # return first 20 unmatched for debugging
+    return result
 # ─────────────────────────────────────────────────────────────────────────────
 
 @app.get("/submissions")
@@ -1310,7 +1333,7 @@ ADMIN_HTML = """
             <input type="file" id="csvFile" accept=".csv,text/csv" onchange="handleFileSelect(this)">
             <div class="upload-icon">📂</div>
             <div class="upload-label">Drop your CSV here or click to browse</div>
-            <div class="upload-hint">Required columns: <code>officer_id</code>, <code>phone</code></div>
+            <div class="upload-hint">Columns: <code>officer_id</code>, <code>lga</code>, <code>ward</code>, <code>polling_unit</code>, <code>phone</code> &nbsp;·&nbsp; Use the template from this portal</div>
             <div class="file-chosen d-none" id="fileChosen"></div>
         </div>
 
@@ -1333,10 +1356,11 @@ ADMIN_HTML = """
     <div class="card">
         <span class="card-title">✏️ Manual Entry (Paste or Type)</span>
         <p style="font-size:0.78rem;color:rgba(255,255,255,0.4);margin-bottom:14px;">
-            One officer per line. Format: <code style="color:#00cc66;">WARDCODE-PUCODE,+2348012345678</code>
+            One officer per line. Format: <code style="color:#00cc66;">officer_id,lga,phone</code><br>
+            <span style="font-size:0.72rem;color:rgba(255,255,255,0.25);">LGA is required to uniquely identify the polling unit across all 30 LGAs.</span>
         </p>
-        <label class="field-label">Officer entries (officer_id,phone)</label>
-        <textarea id="manualInput" placeholder="WARD001-PU001,+2348012345678&#10;WARD001-PU002,+2348023456789&#10;WARD002-PU001,+2348034567890"></textarea>
+        <label class="field-label">Officer entries (officer_id, lga, phone)</label>
+        <textarea id="manualInput" placeholder="10-001,Osogbo,+2348012345678&#10;06-001,Ife Central,+2348023456789&#10;04-001,Atakumosa East,+2348034567890"></textarea>
         <div class="result-banner" id="manualResult"></div>
         <div style="margin-top:14px;">
             <button class="btn-primary" id="manualBtn" onclick="submitManual()">Register These Officers</button>
@@ -1433,41 +1457,83 @@ ADMIN_HTML = """
     function parseCSV(text) {
         const lines = text.trim().split(/\\r?\\n/).filter(l => l.trim());
         if (!lines.length) return;
-        // Detect header row
         const first = lines[0].toLowerCase();
-        const hasHeader = first.includes('officer_id') || first.includes('phone');
+        const hasHeader = first.includes('officer_id') || first.includes('phone') || first.includes('lga');
         const dataLines = hasHeader ? lines.slice(1) : lines;
+
+        // Detect column positions from header
+        let colOfficer = 0, colLga = 1, colWard = 2, colPu = 3, colPhone = 4;
+        if (hasHeader) {
+            const hCols = _splitCSVLine(lines[0].toLowerCase());
+            hCols.forEach((h, i) => {
+                if (h.includes('officer_id') || h === 'officer id') colOfficer = i;
+                else if (h === 'lga')                               colLga     = i;
+                else if (h === 'ward')                              colWard    = i;
+                else if (h.includes('polling') || h.includes('unit')) colPu    = i;
+                else if (h === 'phone')                             colPhone   = i;
+            });
+        }
+
         _parsedRows = [];
         dataLines.forEach((line, i) => {
-            const parts = line.split(',');
-            const officer_id = (parts[0] || '').trim();
-            const phone      = (parts[1] || '').trim();
-            const valid = officer_id.includes('-') && phone.length >= 10;
-            _parsedRows.push({ officer_id, phone, valid, row: i + (hasHeader ? 2 : 1) });
+            const parts      = _splitCSVLine(line);
+            const officer_id = (parts[colOfficer] || '').trim();
+            const lga        = (parts[colLga]     || '').trim();
+            const ward       = (parts[colWard]    || '').trim();
+            const pu         = (parts[colPu]      || '').trim();
+            const phone      = (parts[colPhone]   || '').trim();
+            const hasPhone   = phone.length >= 10;
+            const valid      = officer_id.includes('-') && hasPhone;
+            const noPhone    = officer_id.includes('-') && !hasPhone;
+            _parsedRows.push({ officer_id, lga, ward, pu, phone, valid, noPhone, row: i + (hasHeader ? 2 : 1) });
         });
         renderPreview();
         document.getElementById('uploadBtn').disabled = _parsedRows.filter(r => r.valid).length === 0;
     }
 
+    // CSV-aware splitter — handles quoted fields containing commas
+    function _splitCSVLine(line) {
+        const result = [];
+        let cur = '', inQuote = false;
+        for (let i = 0; i < line.length; i++) {
+            const ch = line[i];
+            if (ch === '"') { inQuote = !inQuote; }
+            else if (ch === ',' && !inQuote) { result.push(cur); cur = ''; }
+            else { cur += ch; }
+        }
+        result.push(cur);
+        return result.map(s => s.replace(/^"|"$/g, '').trim());
+    }
+
     function renderPreview() {
-        const section = document.getElementById('previewSection');
-        const label   = document.getElementById('previewLabel');
-        const valid   = _parsedRows.filter(r => r.valid).length;
-        const invalid = _parsedRows.filter(r => !r.valid).length;
-        label.innerHTML = `<span style="color:#00cc66;">${valid} valid</span>${invalid ? ` &nbsp;·&nbsp; <span style="color:#ff6b6b;">${invalid} invalid</span>` : ''} &nbsp;·&nbsp; ${_parsedRows.length} total rows`;
+        const section  = document.getElementById('previewSection');
+        const label    = document.getElementById('previewLabel');
+        const valid    = _parsedRows.filter(r => r.valid).length;
+        const noPhone  = _parsedRows.filter(r => r.noPhone).length;
+        const invalid  = _parsedRows.filter(r => !r.valid && !r.noPhone).length;
+        label.innerHTML =
+            `<span style="color:#00cc66;">${valid} ready to upload</span>` +
+            (noPhone  ? ` &nbsp;·&nbsp; <span style="color:#ffc107;">${noPhone} missing phone (will skip)</span>` : '') +
+            (invalid  ? ` &nbsp;·&nbsp; <span style="color:#ff6b6b;">${invalid} invalid rows</span>` : '') +
+            ` &nbsp;·&nbsp; ${_parsedRows.length} total`;
         section.style.display = 'block';
 
         const thead = document.querySelector('#previewTable thead');
         const tbody = document.querySelector('#previewTable tbody');
-        thead.innerHTML = '<tr><th>#</th><th>Officer ID</th><th>Phone</th><th>Status</th></tr>';
-        tbody.innerHTML = _parsedRows.slice(0, 50).map(r =>
-            `<tr>
+        thead.innerHTML = '<tr><th>#</th><th>Officer ID</th><th>LGA</th><th>Ward</th><th>Polling Unit</th><th>Phone</th><th>Status</th></tr>';
+        tbody.innerHTML = _parsedRows.slice(0, 100).map(r => {
+            const statusIcon = r.valid ? '✅' : r.noPhone ? '⏭ skip' : '⚠️';
+            const rowClass   = r.valid ? 'valid' : r.noPhone ? '' : 'invalid';
+            return `<tr>
                 <td class="row-num">${r.row}</td>
-                <td class="${r.valid ? 'valid' : 'invalid'}">${r.officer_id || '<em>empty</em>'}</td>
-                <td class="${r.valid ? 'valid' : 'invalid'}">${r.phone || '<em>empty</em>'}</td>
-                <td>${r.valid ? '✅ OK' : '⚠️ Invalid'}</td>
-            </tr>`
-        ).join('') + (_parsedRows.length > 50 ? `<tr><td colspan="4" style="color:rgba(255,255,255,0.3);text-align:center;padding:10px;">... and ${_parsedRows.length - 50} more rows</td></tr>` : '');
+                <td class="${rowClass}" style="font-weight:700;">${r.officer_id || '<em>—</em>'}</td>
+                <td style="color:rgba(255,255,255,0.6);font-size:0.72rem;">${r.lga || '—'}</td>
+                <td style="color:rgba(255,255,255,0.5);font-size:0.7rem;">${r.ward || '—'}</td>
+                <td style="color:rgba(255,255,255,0.45);font-size:0.68rem;max-width:160px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;" title="${r.pu}">${r.pu || '—'}</td>
+                <td class="${r.valid ? 'valid' : r.noPhone ? '' : 'invalid'}">${r.phone || '<em style="color:#555;">blank</em>'}</td>
+                <td>${statusIcon}</td>
+            </tr>`;
+        }).join('') + (_parsedRows.length > 100 ? `<tr><td colspan="7" style="color:rgba(255,255,255,0.3);text-align:center;padding:10px;">... and ${_parsedRows.length - 100} more rows</td></tr>` : '');
     }
 
     function clearFile() {
@@ -1486,7 +1552,9 @@ ADMIN_HTML = """
         const res_el = document.getElementById('uploadResult');
         btn.disabled = true; btn.textContent = `Uploading ${valid.length} officers...`;
         res_el.style.display = 'none';
-        await _submitOfficers(valid, res_el);
+        // Pass full record including lga so backend can do exact match
+        const officers = valid.map(r => ({ officer_id: r.officer_id, lga: r.lga, phone: r.phone }));
+        await _submitOfficers(officers, res_el);
         btn.disabled = false; btn.textContent = 'Upload & Register Officers';
         loadStats();
     }
@@ -1495,15 +1563,19 @@ ADMIN_HTML = """
     async function submitManual() {
         const raw = document.getElementById('manualInput').value.trim();
         if (!raw) return;
-        const btn   = document.getElementById('manualBtn');
+        const btn    = document.getElementById('manualBtn');
         const res_el = document.getElementById('manualResult');
-        const lines = raw.split(/\\n/).filter(l => l.trim());
+        const lines  = raw.split(/\\n/).filter(l => l.trim());
         const officers = lines.map(l => {
-            const p = l.split(',');
-            return { officer_id: (p[0] || '').trim(), phone: (p[1] || '').trim() };
+            const p = _splitCSVLine(l);
+            if (p.length >= 3) {
+                return { officer_id: (p[0]||'').trim(), lga: (p[1]||'').trim(), phone: (p[2]||'').trim() };
+            } else {
+                return { officer_id: (p[0]||'').trim(), lga: '', phone: (p[1]||'').trim() };
+            }
         }).filter(o => o.officer_id && o.phone);
         if (!officers.length) {
-            showBanner(res_el, 'No valid entries found. Format: WARDCODE-PUCODE,+2348012345678', 'error');
+            showBanner(res_el, 'No valid entries. Format: officer_id,lga,phone  e.g.  10-001,Osogbo,+2348012345678', 'error');
             return;
         }
         btn.disabled = true; btn.textContent = `Registering ${officers.length} officers...`;
@@ -1526,9 +1598,12 @@ ADMIN_HTML = """
                 showBanner(res_el, out.detail || 'Upload failed.', 'error');
                 return;
             }
-            const msg = `✅ ${out.updated} officer${out.updated !== 1 ? 's' : ''} registered successfully` +
-                        (out.skipped ? ` · ${out.skipped} skipped (ID not found in Osun DB)` : '');
-            showBanner(res_el, msg, 'success');
+            let msg = `✅ ${out.updated} officer${out.updated !== 1 ? 's' : ''} registered successfully`;
+            if (out.skipped)    msg += ` · ${out.skipped} skipped (blank phone or invalid format)`;
+            if (out.not_found && out.not_found.length) {
+                msg += `<br><span style="color:#ffc107;font-size:0.78rem;">⚠️ Not found in DB (check LGA spelling): ${out.not_found.slice(0,5).join(', ')}${out.not_found.length > 5 ? ' ...' : ''}</span>`;
+            }
+            showBanner(res_el, msg, out.updated > 0 ? 'success' : 'info');
         } catch(e) {
             showBanner(res_el, 'Server error. Try again.', 'error');
         }
