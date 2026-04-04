@@ -864,24 +864,24 @@ async def request_otp(request: Request):
     }
 
     # Send via Twilio WhatsApp
-    try:
-        from twilio.rest import Client as _TC
-        account_sid = os.environ.get("TWILIO_ACCOUNT_SID", "")
-        auth_token  = os.environ.get("TWILIO_AUTH_TOKEN", "")
-        from_number = os.environ.get("TWILIO_WHATSAPP_FROM", "+14155238886")
-        if not account_sid or not auth_token:
-            # In production this is a hard error — officer cannot authenticate without OTP
-            dev_mode = os.environ.get("OTP_DEV_MODE", "").lower() in ("1", "true", "yes")
-            if dev_mode:
-                logger.warning("Twilio not configured — OTP not sent (dev mode)")
-                logger.info(f"[DEV OTP] {officer_id}: {otp}")
-            else:
-                logger.error("Twilio credentials missing — cannot send OTP")
-                raise HTTPException(
-                    status_code=503,
-                    detail="OTP service is not configured. Contact your administrator."
-                )
+    account_sid = os.environ.get("TWILIO_ACCOUNT_SID", "")
+    auth_token  = os.environ.get("TWILIO_AUTH_TOKEN", "")
+    from_number = os.environ.get("TWILIO_WHATSAPP_FROM", "+14155238886")
+
+    if not account_sid or not auth_token:
+        dev_mode = os.environ.get("OTP_DEV_MODE", "").lower() in ("1", "true", "yes")
+        if dev_mode:
+            logger.warning("Twilio not configured — OTP not sent (dev mode)")
+            logger.info(f"[DEV OTP] {officer_id}: {otp}")
         else:
+            logger.error("Twilio credentials missing — cannot send OTP")
+            raise HTTPException(
+                status_code=503,
+                detail="OTP service is not configured. Contact your administrator."
+            )
+    else:
+        try:
+            from twilio.rest import Client as _TC
             client = _TC(account_sid, auth_token)
             msg = (
                 f"🗳 *ACCORD FIELD COLLATION*\n"
@@ -898,9 +898,14 @@ async def request_otp(request: Request):
                 body=msg
             )
             logger.info(f"✅ OTP sent to {_mask_phone(phone)} for officer {officer_id}")
-    except Exception as e:
-        logger.error(f"OTP send failed: {e}", exc_info=True)
-        raise HTTPException(status_code=500, detail="Failed to send OTP. Try again.")
+        except Exception as e:
+            # Surface the real Twilio error — critical for diagnosing send failures
+            twilio_msg = str(e)
+            logger.error(f"Twilio OTP send failed for {officer_id}: {twilio_msg}", exc_info=True)
+            raise HTTPException(
+                status_code=500,
+                detail=f"Failed to send OTP: {twilio_msg}"
+            )
 
     return {
         "status": "sent",
