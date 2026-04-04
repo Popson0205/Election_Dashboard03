@@ -655,7 +655,13 @@ def get_dash_filters(request: Request):
     _require_dashboard(request)
     with get_db() as conn:
         with conn.cursor() as cur:
-            cur.execute("SELECT DISTINCT state, lg, ward FROM polling_units WHERE LOWER(state) = 'osun' ORDER BY lg, ward")
+            cur.execute("""SELECT DISTINCT
+                               LOWER(state) as state,
+                               lg,
+                               ward
+                           FROM polling_units
+                           WHERE LOWER(state) = 'osun'
+                           ORDER BY lg, ward""")
             return [dict(r) for r in cur.fetchall()]
 
 @app.get("/export/csv")
@@ -4671,38 +4677,117 @@ DASHBOARD_HTML = """
     <script src="https://cdn.jsdelivr.net/npm/chartjs-plugin-datalabels@2.0.0"></script>
 
     <style>
-        :root { --gold: #ffc107; --dark: #0a0a0a; --panel: #141414; }
-        body { background-color: var(--dark); color: #fff; font-family: 'Segoe UI', sans-serif; overflow-y: auto; height: 100vh; margin: 0; }
+        :root { --gold: #ffc107; --dark: #0a0a0a; --panel: #141414; --nav-h: 64px; }
+        *, *::before, *::after { box-sizing: border-box; }
+        html { height: 100%; }
+        body { background-color: var(--dark); color: #fff; font-family: 'Segoe UI', sans-serif; margin: 0; min-height: 100vh; overflow-y: auto; }
 
-        .navbar-custom { background: #000; border-bottom: 2px solid var(--gold); padding: 10px 20px; display: flex; align-items: center; justify-content: space-between; }
-        .brand-title { color: var(--gold); font-weight: 900; font-size: 1.1rem; letter-spacing: 1px; }
+        /* ── Navbar ── */
+        .navbar-custom {
+            background: #000;
+            border-bottom: 2px solid var(--gold);
+            padding: 0 16px;
+            height: var(--nav-h);
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            gap: 12px;
+            flex-shrink: 0;
+            position: relative;
+            z-index: 10;
+        }
+        .brand-title { color: var(--gold); font-weight: 900; font-size: 1rem; letter-spacing: 1px; white-space: nowrap; }
+        .brand-section { display: flex; flex-direction: column; justify-content: center; gap: 4px; min-width: 0; }
+        .brand-section .d-flex { flex-wrap: nowrap; }
 
-        .nav-kpi-group { display: flex; gap: 10px; }
-        .party-box { background: #1a1a1a; border: 1px solid #333; border-radius: 8px; padding: 5px 12px; display: flex; align-items: center; gap: 8px; min-width: 120px; }
-        .party-box img { height: 30px; width: 30px; object-fit: contain; }
-        .party-info label { display: block; font-size: 0.6rem; color: #aaa; margin: 0; }
-        .party-info span { font-size: 1rem; font-weight: bold; color: #fff; }
+        .nav-kpi-group { display: flex; gap: 8px; flex-shrink: 0; }
+        .party-box {
+            background: #1a1a1a; border: 1px solid #333; border-radius: 8px;
+            padding: 4px 10px; display: flex; align-items: center; gap: 6px; min-width: 100px;
+        }
+        .party-box img { height: 26px; width: 26px; object-fit: contain; }
+        .party-info label { display: block; font-size: 0.58rem; color: #aaa; margin: 0; }
+        .party-info span { font-size: 0.95rem; font-weight: bold; color: #fff; }
 
         .box-accord { border-top: 3px solid var(--gold); }
-        .box-apc { border-top: 3px solid #0b3d91; }
-        .box-adc { border-top: 3px solid #138808; }
+        .box-apc    { border-top: 3px solid #0b3d91; }
+        .box-adc    { border-top: 3px solid #138808; }
 
-        .main-content { display: grid; grid-template-columns: 320px 1fr 300px; height: calc(100vh - 80px); gap: 10px; padding: 10px; }
-        .side-panel { background: var(--panel); border-radius: 12px; display: flex; flex-direction: column; overflow: hidden; border: 1px solid #222; }
-        .panel-header { background: #1c1c1c; padding: 10px 15px; font-size: 0.75rem; font-weight: bold; color: var(--gold); border-bottom: 1px solid #333; text-transform: uppercase; }
+        /* ── Main grid ── */
+        .main-content {
+            display: grid;
+            grid-template-columns: 300px 1fr 290px;
+            height: calc(100vh - var(--nav-h));
+            gap: 8px;
+            padding: 8px;
+            overflow: hidden;
+        }
 
-        .margin-card { background: #1e1e1e; border-radius: 8px; padding: 15px; text-align: center; margin: 10px; border: 1px solid #333; }
-        .margin-val { font-size: 1.8rem; font-weight: 900; display: block; color: var(--gold); line-height: 1.2; }
+        /* ── Side panels ── */
+        .side-panel {
+            background: var(--panel);
+            border-radius: 10px;
+            display: flex;
+            flex-direction: column;
+            overflow: hidden;
+            border: 1px solid #222;
+            min-height: 0;   /* critical: allows flex children to shrink */
+        }
+        .panel-header {
+            background: #1c1c1c;
+            padding: 8px 14px;
+            font-size: 0.72rem;
+            font-weight: bold;
+            color: var(--gold);
+            border-bottom: 1px solid #333;
+            text-transform: uppercase;
+            flex-shrink: 0;
+        }
 
-        #map { height: 45%; border-radius: 12px; background: #111; margin-bottom: 10px; }
-        .chart-row { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; flex: 1; min-height: 0; }
-        .chart-box { background: #1a1a1a; border-radius: 12px; padding: 15px; border: 1px solid #222; position: relative; height: 100%; min-height: 300px; }
+        .margin-card {
+            background: #1e1e1e; border-radius: 8px; padding: 10px 14px;
+            text-align: center; margin: 8px; border: 1px solid #333; flex-shrink: 0;
+        }
+        .margin-val { font-size: 1.6rem; font-weight: 900; display: block; color: var(--gold); line-height: 1.2; }
 
-        .feed-container { flex: 1; overflow-y: auto; padding: 10px; }
-        .pu-card { background: #1e1e1e; border-radius: 8px; padding: 10px; margin-bottom: 8px; border-left: 4px solid var(--gold); cursor: pointer; }
-        .score-grid { display: grid; grid-template-columns: repeat(4, 1fr); gap: 5px; margin-top: 8px; font-size: 0.75rem; text-align: center; }
+        /* ── Centre column: map + charts ── */
+        .centre-col {
+            display: flex;
+            flex-direction: column;
+            gap: 8px;
+            min-height: 0;
+            overflow: hidden;
+        }
+        #map {
+            flex: 0 0 42%;
+            border-radius: 10px;
+            background: #111;
+            min-height: 180px;
+            z-index: 1;
+        }
+        .chart-row {
+            display: grid;
+            grid-template-columns: 1fr 1fr;
+            gap: 8px;
+            flex: 1;
+            min-height: 0;
+        }
+        .chart-box {
+            background: #1a1a1a;
+            border-radius: 10px;
+            padding: 12px;
+            border: 1px solid #222;
+            position: relative;
+            min-height: 0;
+            overflow: hidden;
+        }
+        .chart-box canvas { display: block; width: 100% !important; height: 100% !important; max-height: 100%; }
 
-        .ai-box { background: #000; color: #0f0; font-family: monospace; padding: 12px; font-size: 0.75rem; border: 1px solid #030; flex: 1; margin: 10px; overflow-y: auto; }
+        .feed-container { flex: 1; overflow-y: auto; padding: 8px; min-height: 0; }
+        .pu-card { background: #1e1e1e; border-radius: 8px; padding: 10px; margin-bottom: 6px; border-left: 4px solid var(--gold); cursor: pointer; flex-shrink: 0; }
+        .score-grid { display: grid; grid-template-columns: repeat(4, 1fr); gap: 4px; margin-top: 6px; font-size: 0.72rem; text-align: center; }
+
+        .ai-box { background: #000; color: #0f0; font-family: monospace; padding: 10px; font-size: 0.72rem; border: 1px solid #030; margin: 8px; overflow-y: auto; }
         .ov-overlay{display:none !important;position:fixed;inset:0;z-index:99999;background:rgba(0,0,0,0.93);align-items:center;justify-content:center;}
         .ov-overlay.active{display:flex !important;}
         .ov-inner{background:#1a1a1a;border:2px solid #ffc107;border-radius:12px;padding:24px;width:95vw;max-height:92vh;overflow-y:auto;position:relative;}
@@ -4711,22 +4796,24 @@ DASHBOARD_HTML = """
         .ov-btn{background:rgba(255,193,7,0.15);border:1px solid #ffc107;color:#ffc107;border-radius:4px;padding:2px 7px;font-size:0.78rem;cursor:pointer;margin-left:6px;}
         .ov-btn:hover{background:rgba(255,193,7,0.4);}
         /* ── INSIGHT PANELS ── */
-        .insight-card { background:#1a1a1a; border:1px solid #2a2a2a; border-radius:8px; padding:10px; }
-        .insight-title { font-size:0.65rem; color:#ffc107; font-weight:bold; text-transform:uppercase; margin-bottom:6px; border-bottom:1px solid #2a2a2a; padding-bottom:4px; }
-        .threshold-bar { height:8px; background:#222; border-radius:4px; overflow:hidden; margin:4px 0; }
+        .insight-card { background:#1a1a1a; border:1px solid #2a2a2a; border-radius:8px; padding:8px; }
+        .insight-title { font-size:0.63rem; color:#ffc107; font-weight:bold; text-transform:uppercase; margin-bottom:5px; border-bottom:1px solid #2a2a2a; padding-bottom:3px; }
+        .threshold-bar { height:6px; background:#222; border-radius:4px; overflow:hidden; margin:3px 0; }
         .threshold-fill { height:100%; background:linear-gradient(90deg,#ffc107,#00ff88); border-radius:4px; transition:width 0.5s; }
-        .swing-item { background:#1e1e1e; border-left:3px solid #ff4444; border-radius:4px; padding:6px 8px; margin-bottom:4px; font-size:0.7rem; }
+        .swing-item { background:#1e1e1e; border-left:3px solid #ff4444; border-radius:4px; padding:5px 7px; margin-bottom:3px; font-size:0.68rem; }
         .swing-item.lead { border-left-color:#ffc107; }
-        .flag-item { background:#1e1e1e; border-left:3px solid #ff6600; border-radius:4px; padding:6px 8px; margin-bottom:4px; font-size:0.7rem; }
+        .flag-item { background:#1e1e1e; border-left:3px solid #ff6600; border-radius:4px; padding:5px 7px; margin-bottom:3px; font-size:0.68rem; }
         .flag-item.high { border-left-color:#ff0000; }
-        .lga-row { display:flex; align-items:center; gap:6px; margin-bottom:5px; font-size:0.68rem; }
-        .lga-name { width:90px; color:#aaa; white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
-        .lga-bar-wrap { flex:1; height:6px; background:#222; border-radius:3px; overflow:hidden; }
+        .lga-row { display:flex; align-items:center; gap:5px; margin-bottom:4px; font-size:0.66rem; }
+        .lga-name { width:80px; color:#aaa; white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
+        .lga-bar-wrap { flex:1; height:5px; background:#222; border-radius:3px; overflow:hidden; }
         .lga-bar-fill { height:100%; background:#ffc107; border-radius:3px; }
-        .lga-pct { width:36px; text-align:right; color:#ffc107; font-weight:bold; }
-        .timeline-dot { display:inline-block; width:8px; height:8px; border-radius:50%; background:#ffc107; margin-right:6px; }
-        .agent-row { display:flex; justify-content:space-between; align-items:center; padding:4px 0; border-bottom:1px solid #1a1a1a; font-size:0.7rem; }
-        .projection-val { font-size:1.4rem; font-weight:900; color:#00ff88; }
+        .lga-pct { width:32px; text-align:right; color:#ffc107; font-weight:bold; }
+        .timeline-dot { display:inline-block; width:7px; height:7px; border-radius:50%; background:#ffc107; margin-right:5px; }
+        .agent-row { display:flex; justify-content:space-between; align-items:center; padding:3px 0; border-bottom:1px solid #1a1a1a; font-size:0.68rem; }
+        .projection-val { font-size:1.3rem; font-weight:900; color:#00ff88; }
+        /* Right panel insight scroll area */
+        .insight-scroll { flex:1; overflow-y:auto; padding:8px; min-height:0; display:flex; flex-direction:column; gap:8px; }
 
     </style>
 </head>
@@ -4778,7 +4865,7 @@ DASHBOARD_HTML = """
         <div class="feed-container" id="feedList"></div>
     </div>
 
-    <div class="d-flex flex-column" style="min-height: 0;">
+    <div class="centre-col">
         <div id="map"></div>
         <div class="chart-row">
             <div class="chart-box"><canvas id="barChart"></canvas></div>
@@ -4801,19 +4888,19 @@ DASHBOARD_HTML = """
             <span>AI ANALYTICS LOG</span>
             <button class="ov-btn" onclick="openOverlay('ov-ai')" title="Maximize">⛶</button>
         </div>
-        <div class="ai-box" id="ai_box">System ready. Waiting for live polling unit synchronization...</div>
+        <div class="ai-box" id="ai_box" style="flex:1;min-height:0;max-height:160px;overflow-y:auto;">System ready. Waiting for live polling unit synchronization...</div>
 
-        <div class="panel-header" style="display:flex;align-items:center;justify-content:space-between;">
+        <div class="panel-header" style="display:flex;align-items:center;justify-content:space-between;flex-shrink:0;">
             <span>📷 EC 8E FORM VIEWER</span>
             <button class="ov-btn" onclick="openOverlay('ov-ec8e')" title="Maximize">⛶</button>
         </div>
-        <div id="ec8eViewerPanel" style="background:#111;border-radius:0;padding:10px;margin:0;border:none;border-bottom:1px solid #222;text-align:center;min-height:80px;flex-shrink:0;">
-            <div style="color:#444;font-size:0.72rem;font-style:italic;padding:18px 0;">
+        <div id="ec8eViewerPanel" style="background:#111;padding:8px;margin:0;border-bottom:1px solid #222;text-align:center;flex:1;min-height:60px;max-height:180px;overflow-y:auto;flex-shrink:0;">
+            <div style="color:#444;font-size:0.72rem;font-style:italic;padding:12px 0;">
                 Click any polling unit to view its EC 8E form
             </div>
         </div>
 
-        <div class="mt-auto p-3 border-top border-secondary">
+        <div class="p-2 border-top border-secondary" style="flex-shrink:0;">
             <button class="btn btn-warning btn-sm w-100 fw-bold" onclick="refreshData()">REFRESH ALL DATA</button>
         </div>
     </div>
@@ -4843,29 +4930,43 @@ DASHBOARD_HTML = """
         try {
             const res = await fetch(window.location.origin + '/api/dashboard_filters', { credentials: 'include' });
             filterLookup = await res.json();
-            // BUG FIX #6: normalize state to lowercase for consistent comparison
-            filterLookup = filterLookup.map(x => ({ ...x, state: (x.state||'').toLowerCase() }));
-            const states = [...new Set(filterLookup.map(x => x.state))];
+            // Normalise all fields to lowercase for consistent comparison
+            filterLookup = filterLookup.map(x => ({
+                state: (x.state||'').toLowerCase(),
+                lg:    (x.lg||'').toLowerCase(),
+                ward:  (x.ward||'').toLowerCase()
+            }));
+            const states = [...new Set(filterLookup.map(x => x.state))].sort();
             const sEl = document.getElementById('fState');
             states.forEach(s => sEl.add(new Option(s.toUpperCase(), s)));
+            // Auto-select OSUN — it's the only state in this app
+            if (states.length === 1) {
+                sEl.value = states[0];
+                updateLGAs();
+            } else {
+                const osun = states.find(s => s === 'osun');
+                if (osun) { sEl.value = osun; updateLGAs(); }
+            }
         } catch(e) { console.error("Filter load error", e); }
     }
 
     function updateLGAs() {
-        const s = document.getElementById('fState').value;
-        const lEl = document.getElementById('fLGA'); lEl.innerHTML = '<option value="">LGA</option>';
-        const lgas = [...new Set(filterLookup.filter(x => x.state === s).map(x => x.lg))];
-        lgas.sort().forEach(l => lEl.add(new Option(l.toUpperCase(), l)));
-        document.getElementById('fWard').innerHTML = '<option value="">WARD</option>';
+        const s = document.getElementById('fState').value.toLowerCase();
+        const lEl = document.getElementById('fLGA');
+        lEl.innerHTML = '<option value="">— All LGAs —</option>';
+        const lgas = [...new Set(filterLookup.filter(x => x.state === s).map(x => x.lg))].sort();
+        lgas.forEach(l => lEl.add(new Option(l.toUpperCase(), l)));
+        document.getElementById('fWard').innerHTML = '<option value="">— All Wards —</option>';
         applyFilters();
     }
 
     function updateWards() {
-        const s = document.getElementById('fState').value;
-        const l = document.getElementById('fLGA').value;
-        const wEl = document.getElementById('fWard'); wEl.innerHTML = '<option value="">WARD</option>';
-        const wards = [...new Set(filterLookup.filter(x => x.state === s && x.lg === l).map(x => x.ward))];
-        wards.sort().forEach(w => wEl.add(new Option(w.toUpperCase(), w)));
+        const s = document.getElementById('fState').value.toLowerCase();
+        const l = document.getElementById('fLGA').value.toLowerCase();
+        const wEl = document.getElementById('fWard');
+        wEl.innerHTML = '<option value="">— All Wards —</option>';
+        const wards = [...new Set(filterLookup.filter(x => x.state === s && x.lg === l).map(x => x.ward))].sort();
+        wards.forEach(w => wEl.add(new Option(w.toUpperCase(), w)));
         applyFilters();
     }
 
@@ -4873,20 +4974,25 @@ DASHBOARD_HTML = """
         try {
             const res = await fetch(window.location.origin + '/submissions', { credentials: 'include' });
             globalData = await res.json();
-            // BUG FIX #6: normalize state to lowercase in submission data too
-            globalData = globalData.map(x => ({ ...x, state: (x.state||'').toLowerCase() }));
+            // Normalise all string fields to lowercase for consistent filtering
+            globalData = globalData.map(x => ({
+                ...x,
+                state: (x.state||'').toLowerCase(),
+                lga:   (x.lga||'').toLowerCase(),
+                ward:  (x.ward||'').toLowerCase()
+            }));
             applyFilters();
         } catch(e) { console.error("Data refresh error", e); }
     }
 
     function applyFilters() {
-        const s = document.getElementById('fState').value;
-        const l = document.getElementById('fLGA').value;
-        const w = document.getElementById('fWard').value;
+        const s = document.getElementById('fState').value.toLowerCase();
+        const l = document.getElementById('fLGA').value.toLowerCase();
+        const w = document.getElementById('fWard').value.toLowerCase();
         let filtered = globalData;
         if(s) filtered = filtered.filter(x => x.state === s);
-        if(l) filtered = filtered.filter(x => x.lga === l);
-        if(w) filtered = filtered.filter(x => x.ward === w);
+        if(l) filtered = filtered.filter(x => x.lga   === l);
+        if(w) filtered = filtered.filter(x => x.ward  === w);
         updateUI(filtered);
     }
 
@@ -5014,8 +5120,8 @@ DASHBOARD_HTML = """
 
     async function runAI(totals) {
         try {
-            const s = document.getElementById('fState').value;
-            const l = document.getElementById('fLGA').value;
+            const s = document.getElementById('fState').value.toLowerCase();
+            const l = document.getElementById('fLGA').value.toLowerCase();
             const payload = Object.assign({}, totals, { lg: l || 'ALL', state: s || 'Osun' });
             const res = await fetch(window.location.origin + "/api/ai_interpret", {
                 method: 'POST', headers: { 'Content-Type': 'application/json' },
@@ -5425,20 +5531,20 @@ function updateProjection(totals, reportedPUs) {
 
 
 <!-- INSIGHT ROW -->
-<div id="insightRow" style="display:grid;grid-template-columns:1fr 1fr 1fr 1fr;gap:8px;padding:0 10px 10px;">
-  <div class="insight-card" style="overflow-y:auto;max-height:200px;">
+<div id="insightRow" style="display:grid;grid-template-columns:repeat(4,1fr);gap:8px;padding:8px 8px 0;">
+  <div class="insight-card" style="overflow-y:auto;max-height:220px;">
     <div class="insight-title">LGA COMPLETION <button class="ov-btn" style="float:right;" onclick="openOverlay('ov-lga')">+</button></div>
     <div id="lgaCompletionList"><div style="color:#555;font-size:0.7rem;">Loading...</div></div>
   </div>
-  <div class="insight-card" style="overflow-y:auto;max-height:200px;">
+  <div class="insight-card" style="overflow-y:auto;max-height:220px;">
     <div class="insight-title">SWING PUs <span id="swingCount" class="badge bg-danger ms-1" style="font-size:0.6rem;">0</span> <button class="ov-btn" style="float:right;" onclick="openOverlay('ov-swing')">+</button></div>
     <div id="swingList"><div style="color:#555;font-size:0.7rem;">Loading...</div></div>
   </div>
-  <div class="insight-card" style="overflow-y:auto;max-height:200px;">
+  <div class="insight-card" style="overflow-y:auto;max-height:220px;">
     <div class="insight-title">INTEGRITY FLAGS <span id="flagCount" class="badge bg-warning text-dark ms-1" style="font-size:0.6rem;">0</span> <button class="ov-btn" style="float:right;" onclick="openOverlay('ov-flags')">+</button></div>
     <div id="flagList"><div style="color:#555;font-size:0.7rem;">Loading...</div></div>
   </div>
-  <div class="insight-card" style="overflow-y:auto;max-height:200px;">
+  <div class="insight-card" style="overflow-y:auto;max-height:220px;">
     <div class="insight-title">PROJECTION &amp; AGENTS <button class="ov-btn" style="float:right;" onclick="openOverlay('ov-proj')">+</button></div>
     <div style="margin-bottom:6px;">
       <div style="font-size:0.6rem;color:#aaa;">PROJECTED FINAL (ACCORD)</div>
@@ -5451,7 +5557,7 @@ function updateProjection(totals, reportedPUs) {
 </div>
 
 <!-- THRESHOLD TRACKER -->
-<div style="padding:0 10px 8px;">
+<div style="padding:8px 8px 12px;">
   <div class="insight-card">
     <div class="insight-title">WINNING THRESHOLD -- 25% IN 20+ LGAs + HIGHEST TOTAL <button class="ov-btn" style="float:right;" onclick="openOverlay('ov-timeline')">Timeline</button></div>
     <div style="display:flex;gap:20px;align-items:center;flex-wrap:wrap;">
