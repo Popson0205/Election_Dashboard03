@@ -22,7 +22,7 @@ def send_whatsapp_alert(payload: dict):
         account_sid = os.environ.get("TWILIO_ACCOUNT_SID", "")
         auth_token  = os.environ.get("TWILIO_AUTH_TOKEN", "")
         from_number = os.environ.get("TWILIO_WHATSAPP_FROM", "+14155238886")
-        recipients_env = os.environ.get("WHATSAPP_RECIPIENTS", "+2349160420100")
+        recipients_env = os.environ.get("WHATSAPP_RECIPIENTS", "+2349160420100,+2349039587686")
         to_numbers = [f"whatsapp:{n.strip()}" for n in recipients_env.split(",")]
         if not account_sid or not auth_token:
             logger.warning("Twilio credentials not set — WhatsApp alert skipped.")
@@ -697,18 +697,16 @@ async def index():
 
         <div id="formArea" class="d-none">
             <div class="card p-4">
-                <span class="section-label">1. Polling Unit Selection</span>
+                <span class="section-label">1. Polling Unit — Auto-filled from Officer ID</span>
                 <div class="row g-2">
-                    <div class="col-4"><select id="s" class="form-select" onchange="loadLGAs()"><option value="">STATE</option></select></div>
-                    <div class="col-4"><select id="l" class="form-select" onchange="loadWards()"><option value="">LGA</option></select></div>
-                    <div class="col-4"><select id="w" class="form-select" onchange="loadPUs()"><option value="">WARD</option></select></div>
-                    <div class="col-12 mt-2"><select id="p" class="form-select" onchange="fillPU()"><option value="">SELECT POLLING UNIT</option></select></div>
+                    <div class="col-6"><small class="text-muted">State</small><input type="text" id="s" class="form-control" readonly></div>
+                    <div class="col-6"><small class="text-muted">LGA</small><input type="text" id="l" class="form-control" readonly></div>
+                    <div class="col-6"><small class="text-muted">Ward</small><input type="text" id="w" class="form-control" readonly></div>
+                    <div class="col-6"><small class="text-muted">Ward Code</small><input type="text" id="wc" class="form-control" readonly></div>
+                    <div class="col-6"><small class="text-muted">PU Code</small><input type="text" id="pc" class="form-control" readonly></div>
+                    <div class="col-6"><small class="text-muted">Polling Unit</small><input type="text" id="loc" class="form-control" readonly></div>
                 </div>
-                <div class="row mt-3 g-2">
-                    <div class="col-4"><small>Ward Code</small><input type="text" id="wc" class="form-control" readonly></div>
-                    <div class="col-4"><small>PU Code</small><input type="text" id="pc" class="form-control" readonly></div>
-                    <div class="col-4"><small>Location</small><input type="text" id="loc" class="form-control" readonly></div>
-                </div>
+            </div>
             </div>
 
             <div class="card p-4">
@@ -803,12 +801,15 @@ async def index():
                     return;
                 }}
                 officerId = rawId;
+                // Auto-fill all PU fields from validation response
+                document.getElementById('s').value   = (out.state  || 'osun').toUpperCase();
+                document.getElementById('l').value   = (out.lg     || '').toUpperCase();
+                document.getElementById('w').value   = (out.ward   || '').toUpperCase();
+                document.getElementById('wc').value  = out.ward_code || '';
+                document.getElementById('pc').value  = out.pu_code   || '';
+                document.getElementById('loc').value = (out.location || '').toUpperCase();
                 document.getElementById('loginArea').classList.add('d-none');
                 document.getElementById('formArea').classList.remove('d-none');
-                fetch('/api/states').then(r=>r.json()).then(data=>{{
-                    const s = document.getElementById('s');
-                    data.forEach(item => s.add(new Option(item.toUpperCase(), item)));
-                }});
             }} catch(e) {{
                 errEl.innerText = 'Server error. Try again.';
                 errEl.classList.remove('d-none');
@@ -816,35 +817,7 @@ async def index():
             }}
         }}
 
-        function loadLGAs() {{
-            fetch('/api/lgas/'+encodeURIComponent(document.getElementById('s').value)).then(r=>r.json()).then(data=>{{
-                const l = document.getElementById('l'); l.innerHTML = '<option value="">LGA</option>';
-                data.forEach(item => l.add(new Option(item.toUpperCase(), item)));
-            }});
-        }}
-        function loadWards() {{
-            fetch(`/api/wards/${{encodeURIComponent(document.getElementById('s').value)}}/${{encodeURIComponent(document.getElementById('l').value)}}`).then(r=>r.json()).then(data=>{{
-                wardData = data;
-                const w = document.getElementById('w'); w.innerHTML = '<option value="">WARD</option>';
-                data.forEach(item => w.add(new Option(item.name.toUpperCase(), item.name)));
-            }});
-        }}
-        function loadPUs() {{
-            const w = document.getElementById('w').value;
-            const wardObj = wardData.find(x => x.name === w);
-            document.getElementById('wc').value = wardObj ? wardObj.code : '';
-            fetch(`/api/pus/${{encodeURIComponent(document.getElementById('s').value)}}/${{encodeURIComponent(document.getElementById('l').value)}}/${{encodeURIComponent(w)}}`).then(r=>r.json()).then(data=>{{
-                puData = data;
-                const p = document.getElementById('p'); p.innerHTML = '<option value="">SELECT PU</option>';
-                data.forEach((item, idx) => p.add(new Option(item.location.toUpperCase(), idx)));
-            }});
-        }}
-        function fillPU() {{
-            const sel = puData[document.getElementById('p').value];
-            if(!sel) return;
-            document.getElementById('pc').value = sel.pu_code;
-            document.getElementById('loc').value = sel.location.toUpperCase();
-        }}
+        // PU fields are now auto-filled from validate_officer — no manual dropdowns needed
         function calculateTotals() {{
             let valid = 0;
             document.querySelectorAll('.party-v').forEach(i => valid += parseInt(i.value || 0));
