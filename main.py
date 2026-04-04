@@ -24,7 +24,7 @@ def send_whatsapp_alert(payload: dict):
         account_sid = os.environ.get("TWILIO_ACCOUNT_SID", "")
         auth_token  = os.environ.get("TWILIO_AUTH_TOKEN", "")
         from_number = os.environ.get("TWILIO_WHATSAPP_FROM", "+14155238886")
-        recipients_env = os.environ.get("WHATSAPP_RECIPIENTS", "+2349160420100,+2349039587686,+2349072707396")
+        recipients_env = os.environ.get("WHATSAPP_RECIPIENTS", "+2349160420100,+2349039587686")
         to_numbers = [f"whatsapp:{n.strip()}" for n in recipients_env.split(",")]
         if not account_sid or not auth_token:
             logger.warning("Twilio credentials not set — WhatsApp alert skipped.")
@@ -167,6 +167,56 @@ def _require_dashboard(request: Request):
     token = request.cookies.get("ds_session")
     if not _is_valid_token(token):
         raise HTTPException(status_code=403, detail="Dashboard access denied")
+
+# ── OTP store ────────────────────────────────────────────────────────────────
+# Structure: { officer_id: { otp, expiry, phone_hint, used, attempts, locked_until } }
+_OTP_STORE: dict = {}
+_OTP_TTL        = 5 * 60        # 5 minutes
+_OTP_MAX_TRIES  = 3             # wrong attempts before lockout
+_OTP_LOCKOUT    = 15 * 60       # 15-minute lockout after max attempts
+_SUBMIT_TOKENS: dict = {}       # token -> { officer_id, expiry }
+_SUBMIT_TOKEN_TTL = 30 * 60     # submission token valid 30 min
+
+def _generate_otp() -> str:
+    """Cryptographically random 6-digit OTP."""
+    import random as _rnd
+    return str(_rnd.SystemRandom().randint(100000, 999999))
+
+def _mask_phone(phone: str) -> str:
+    """Return +234***4567 style hint."""
+    if len(phone) < 6:
+        return "****"
+    return phone[:4] + "***" + phone[-4:]
+
+def _make_submit_token(officer_id: str) -> str:
+    """Short-lived signed token that authorises one submission."""
+    import hmac as _hmac
+    token = secrets.token_hex(24)
+    expiry = time.time() + _SUBMIT_TOKEN_TTL
+    # Sign: HMAC of token+officer_id with DASHBOARD_KEY_HASH as key material
+    sig = _hmac.new(
+        _DASHBOARD_KEY_HASH.encode(),
+        (token + officer_id).encode(),
+        "sha256"
+    ).hexdigest()[:16]
+    full = f"{token}.{sig}"
+    _SUBMIT_TOKENS[full] = {"officer_id": officer_id, "expiry": expiry}
+    return full
+
+def _verify_submit_token(token: str, officer_id: str) -> bool:
+    """Verify token is valid, not expired, and belongs to this officer."""
+    entry = _SUBMIT_TOKENS.get(token)
+    if not entry:
+        return False
+    if time.time() > entry["expiry"]:
+        _SUBMIT_TOKENS.pop(token, None)
+        return False
+    if entry["officer_id"] != officer_id:
+        return False
+    # Single-use: remove after first successful check
+    _SUBMIT_TOKENS.pop(token, None)
+    return True
+# ─────────────────────────────────────────────────────────────────────────────
 
 # ── Rate limiter for validate_officer (10 attempts / 60s per IP) ──────────────
 _rl_store: dict = defaultdict(list)
@@ -320,6 +370,12 @@ def init_db():
         except Exception:
             pass  # Column already exists — fine
 
+        # Safe migration: add officer_phone to polling_units if missing
+        try:
+            cur.execute("ALTER TABLE polling_units ADD COLUMN officer_phone TEXT")
+        except Exception:
+            pass  # Column already exists — fine
+
         # ── Incidents table ────────────────────────────────────────────────────
         cur.execute("""
             CREATE TABLE IF NOT EXISTS incidents (
@@ -369,6 +425,7 @@ def validate_officer(officer_id: str, request: Request):
                     """SELECT ward, lg, location, pu_code, ward_code, state
                        FROM polling_units
                        WHERE ward_code = ? AND pu_code = ?
+                       AND LOWER(state) = 'osun'
                        LIMIT 1""",
                     (ward_code, pu_code)
                 )
@@ -377,6 +434,7 @@ def validate_officer(officer_id: str, request: Request):
                     return {
                         "valid": True,
                         "message": f"Access Granted: {row['location']}",
+                        "state": row["state"] or "osun",
                         "ward": row["ward"],
                         "lg": row["lg"],
                         "location": row["location"],
@@ -429,6 +487,11 @@ async def submit(
 ):
     try:
         payload = json.loads(data)
+        # Verify submission token — proves officer completed OTP auth
+        submit_token = payload.get("submit_token", "")
+        officer_id   = payload.get("officer_id", "")
+        if not _verify_submit_token(submit_token, officer_id):
+            return {"status": "error", "message": "Session expired or invalid. Please log in again."}
         votes_json = json.dumps(payload.get("votes", {}))
         ec8e_filename = None
         if ec8e_image and ec8e_image.filename:
@@ -458,7 +521,9 @@ async def submit(
                     reg_voters, total_accredited, valid_votes, rejected_votes, total_cast,
                     lat, lon, timestamp, votes_json, ec8e_image
                 ) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)""", (
-                    payload.get("officer_id"), payload.get("state"), payload.get("lg"),
+                    payload.get("officer_id"),
+                    (payload.get("state") or "osun").lower(),  # always store lowercase
+                    payload.get("lg"),
                     payload.get("ward"), payload.get("ward_code"), payload.get("pu_code"),
                     payload.get("location"), payload.get("reg_voters"), payload.get("total_accredited"),
                     payload.get("valid_votes"), payload.get("rejected_votes"), payload.get("total_cast"),
@@ -683,12 +748,284 @@ async def logout_dashboard(request: Request, response: Response):
     return {"status": "ok"}
 # ─────────────────────────────────────────────────────────────────────────────
 
+# ── OTP endpoints ────────────────────────────────────────────────────────────
+@app.post("/api/request-otp")
+async def request_otp(request: Request):
+    """
+    Step 1 of officer auth.
+    Body: { "officer_id": "WARDCODE-PUCODE" }
+    Returns: { "status": "sent", "phone_hint": "+234***4567" }
+             or { "status": "no_phone", "message": "..." }
+    """
+    _check_rate_limit(request.client.host)
+    try:
+        body = await request.json()
+    except Exception:
+        raise HTTPException(status_code=400, detail="Invalid JSON")
+
+    officer_id = str(body.get("officer_id", "")).strip()[:60]
+    import re as _re2
+    officer_id = _re2.sub(r"[^A-Za-z0-9\-/_ ]", "", officer_id)
+
+    parts = officer_id.split("-", 1)
+    if len(parts) != 2:
+        raise HTTPException(status_code=400, detail="Invalid officer ID format")
+    ward_code, pu_code = parts[0].strip(), parts[1].strip()
+
+    # Check lockout
+    entry = _OTP_STORE.get(officer_id, {})
+    locked_until = entry.get("locked_until", 0)
+    if time.time() < locked_until:
+        remaining = int(locked_until - time.time())
+        raise HTTPException(
+            status_code=429,
+            detail=f"Too many failed attempts. Try again in {remaining // 60}m {remaining % 60}s."
+        )
+
+    # Fetch officer record
+    with get_db() as conn:
+        with conn.cursor() as cur:
+            cur.execute(
+                """SELECT ward, lg, location, pu_code, ward_code, state, officer_phone
+                   FROM polling_units
+                   WHERE ward_code = ? AND pu_code = ?
+                   AND LOWER(state) = 'osun'
+                   LIMIT 1""",
+                (ward_code, pu_code)
+            )
+            row = cur.fetchone()
+
+    if not row:
+        raise HTTPException(status_code=404, detail="Officer ID not found. Access Denied.")
+
+    phone = row["officer_phone"] if row["officer_phone"] else None
+    if not phone:
+        # No phone on file — return special status so UI can show message
+        return {
+            "status": "no_phone",
+            "message": "No phone number registered for this officer ID. Contact your supervisor."
+        }
+
+    # Generate OTP and store
+    otp = _generate_otp()
+    _OTP_STORE[officer_id] = {
+        "otp": otp,
+        "expiry": time.time() + _OTP_TTL,
+        "phone_hint": _mask_phone(phone),
+        "phone": phone,
+        "used": False,
+        "attempts": 0,
+        "locked_until": 0,
+        # Cache PU data so verify-otp can return it without another DB hit
+        "pu_data": {
+            "state": row["state"] or "osun",
+            "ward": row["ward"],
+            "lg": row["lg"],
+            "location": row["location"],
+            "pu_code": row["pu_code"],
+            "ward_code": row["ward_code"],
+        }
+    }
+
+    # Send via Twilio WhatsApp
+    try:
+        from twilio.rest import Client as _TC
+        account_sid = os.environ.get("TWILIO_ACCOUNT_SID", "")
+        auth_token  = os.environ.get("TWILIO_AUTH_TOKEN", "")
+        from_number = os.environ.get("TWILIO_WHATSAPP_FROM", "+14155238886")
+        if not account_sid or not auth_token:
+            logger.warning("Twilio not configured — OTP not sent (dev mode)")
+            # In dev, log OTP for testing
+            logger.info(f"[DEV OTP] {officer_id}: {otp}")
+        else:
+            client = _TC(account_sid, auth_token)
+            msg = (
+                f"🗳 *ACCORD FIELD COLLATION*\n"
+                f"━━━━━━━━━━━━━━━━━━\n"
+                f"Your One-Time Password:\n\n"
+                f"*{otp}*\n\n"
+                f"Valid for *5 minutes*. Do NOT share this code.\n"
+                f"━━━━━━━━━━━━━━━━━━\n"
+                f"_Powered by Popson Geospatial Services_"
+            )
+            client.messages.create(
+                from_=f"whatsapp:{from_number}",
+                to=f"whatsapp:{phone}",
+                body=msg
+            )
+            logger.info(f"✅ OTP sent to {_mask_phone(phone)} for officer {officer_id}")
+    except Exception as e:
+        logger.error(f"OTP send failed: {e}", exc_info=True)
+        raise HTTPException(status_code=500, detail="Failed to send OTP. Try again.")
+
+    return {
+        "status": "sent",
+        "phone_hint": _mask_phone(phone)
+    }
+
+
+@app.post("/api/verify-otp")
+async def verify_otp(request: Request):
+    """
+    Step 2 of officer auth.
+    Body: { "officer_id": "WARDCODE-PUCODE", "otp": "123456" }
+    Returns: { "status": "ok", "token": "...", "pu_data": {...} }
+    """
+    _check_rate_limit(request.client.host)
+    try:
+        body = await request.json()
+    except Exception:
+        raise HTTPException(status_code=400, detail="Invalid JSON")
+
+    officer_id = str(body.get("officer_id", "")).strip()[:60]
+    import re as _re3
+    officer_id = _re3.sub(r"[^A-Za-z0-9\-/_ ]", "", officer_id)
+    given_otp  = str(body.get("otp", "")).strip()[:6]
+
+    entry = _OTP_STORE.get(officer_id)
+
+    # No OTP requested
+    if not entry:
+        raise HTTPException(status_code=400, detail="No OTP requested for this officer. Start again.")
+
+    # Lockout check
+    if time.time() < entry.get("locked_until", 0):
+        remaining = int(entry["locked_until"] - time.time())
+        raise HTTPException(
+            status_code=429,
+            detail=f"Account locked. Try again in {remaining // 60}m {remaining % 60}s."
+        )
+
+    # Already used
+    if entry.get("used"):
+        raise HTTPException(status_code=400, detail="OTP already used. Request a new one.")
+
+    # Expired
+    if time.time() > entry["expiry"]:
+        _OTP_STORE.pop(officer_id, None)
+        raise HTTPException(status_code=400, detail="OTP expired. Request a new one.")
+
+    # Wrong OTP — increment attempts
+    if not secrets.compare_digest(given_otp, entry["otp"]):
+        entry["attempts"] = entry.get("attempts", 0) + 1
+        remaining_tries = _OTP_MAX_TRIES - entry["attempts"]
+        if entry["attempts"] >= _OTP_MAX_TRIES:
+            entry["locked_until"] = time.time() + _OTP_LOCKOUT
+            entry["used"] = True  # invalidate
+            raise HTTPException(
+                status_code=429,
+                detail=f"Too many wrong attempts. Account locked for {_OTP_LOCKOUT // 60} minutes."
+            )
+        raise HTTPException(
+            status_code=401,
+            detail=f"Incorrect OTP. {remaining_tries} attempt{'s' if remaining_tries != 1 else ''} remaining."
+        )
+
+    # ✅ Correct OTP — mark used, issue submission token
+    entry["used"] = True
+    token = _make_submit_token(officer_id)
+    pu_data = entry["pu_data"]
+
+    return {
+        "status": "ok",
+        "token": token,
+        "officer_id": officer_id,
+        "state":     pu_data["state"],
+        "ward":      pu_data["ward"],
+        "lg":        pu_data["lg"],
+        "location":  pu_data["location"],
+        "pu_code":   pu_data["pu_code"],
+        "ward_code": pu_data["ward_code"],
+    }
+# ─────────────────────────────────────────────────────────────────────────────
+
+# ── Admin: officer stats ─────────────────────────────────────────────────────
+@app.get("/api/admin/officer-stats")
+async def officer_stats(request: Request):
+    auth = request.headers.get("Authorization", "")
+    if not auth.startswith("Bearer "):
+        raise HTTPException(status_code=401, detail="Missing Authorization")
+    given_hash = hashlib.sha256(auth.split(" ", 1)[1].strip().encode()).hexdigest()
+    if not secrets.compare_digest(given_hash, _DASHBOARD_KEY_HASH):
+        raise HTTPException(status_code=403, detail="Invalid key")
+    with get_db() as conn:
+        with conn.cursor() as cur:
+            cur.execute("SELECT COUNT(*) as total FROM polling_units WHERE LOWER(state)='osun'")
+            total = cur.fetchone()["total"]
+            cur.execute("SELECT COUNT(*) as c FROM polling_units WHERE LOWER(state)='osun' AND officer_phone IS NOT NULL AND officer_phone != ''")
+            with_phone = cur.fetchone()["c"]
+    return {"total": total, "with_phone": with_phone, "without_phone": total - with_phone}
+# ─────────────────────────────────────────────────────────────────────────────
+
+# ── Admin: set officer phone numbers ─────────────────────────────────────────
+@app.post("/api/admin/set-officer-phone")
+async def set_officer_phone(request: Request):
+    """
+    Protected by DASHBOARD_KEY (same secret as dashboard).
+    Accepts JSON:
+      Single:  {"officer_id": "WARDCODE-PUCODE", "phone": "+2348012345678"}
+      Bulk:    {"officers": [{"officer_id": "...", "phone": "..."}, ...]}
+    """
+    # Verify admin key from Authorization header
+    auth = request.headers.get("Authorization", "")
+    if not auth.startswith("Bearer "):
+        raise HTTPException(status_code=401, detail="Missing Authorization header")
+    given = auth.split(" ", 1)[1].strip()
+    given_hash = hashlib.sha256(given.encode()).hexdigest()
+    if not secrets.compare_digest(given_hash, _DASHBOARD_KEY_HASH):
+        raise HTTPException(status_code=403, detail="Invalid admin key")
+
+    try:
+        body = await request.json()
+    except Exception:
+        raise HTTPException(status_code=400, detail="Invalid JSON body")
+
+    import re as _re
+    def _clean_phone(p: str) -> str:
+        p = _re.sub(r"[^+0-9]", "", str(p))
+        if not p.startswith("+"):
+            p = "+234" + p.lstrip("0")
+        return p
+
+    records = body.get("officers") or ([body] if "officer_id" in body else [])
+    if not records:
+        raise HTTPException(status_code=400, detail="Provide officer_id+phone or officers array")
+
+    updated, skipped = 0, 0
+    with get_db() as conn:
+        with conn.cursor() as cur:
+            for rec in records:
+                oid = str(rec.get("officer_id", "")).strip()[:60]
+                phone = _clean_phone(rec.get("phone", ""))
+                if not oid or not phone or len(phone) < 10:
+                    skipped += 1
+                    continue
+                parts = oid.split("-", 1)
+                if len(parts) != 2:
+                    skipped += 1
+                    continue
+                ward_code, pu_code = parts[0].strip(), parts[1].strip()
+                cur.execute(
+                    """UPDATE polling_units SET officer_phone = ?
+                       WHERE ward_code = ? AND pu_code = ?
+                       AND LOWER(state) = 'osun'""",
+                    (phone, ward_code, pu_code)
+                )
+                if conn._conn.total_changes > 0:
+                    updated += 1
+                else:
+                    skipped += 1
+        conn.commit()
+
+    return {"status": "ok", "updated": updated, "skipped": skipped}
+# ─────────────────────────────────────────────────────────────────────────────
+
 @app.get("/submissions")
 async def get_dashboard_data(request: Request):
     _require_dashboard(request)
     with get_db() as conn:
         with conn.cursor() as cur:
-            cur.execute("SELECT * FROM field_submissions WHERE state = 'osun' ORDER BY timestamp DESC")
+            cur.execute("SELECT * FROM field_submissions WHERE LOWER(state) = 'osun' ORDER BY timestamp DESC")
             rows = cur.fetchall()
             data = []
             for r in rows:
@@ -732,6 +1069,520 @@ async def serve_ec8e(filename: str):
         "Access-Control-Allow-Origin": "*"
     })
 
+
+ADMIN_HTML = """
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>ACCORD — Admin Portal</title>
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;600;700;900&display=swap" rel="stylesheet">
+    <style>
+        *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+        :root {
+            --green: #008751; --green-light: #00b368; --gold: #ffc107;
+            --dark: #020c06; --panel: rgba(255,255,255,0.04); --border: rgba(255,255,255,0.1);
+        }
+        body { font-family: 'Inter', sans-serif; background: var(--dark); color: #fff; min-height: 100vh; }
+        body::before {
+            content: ''; position: fixed; inset: 0; z-index: 0;
+            background: radial-gradient(ellipse 120% 80% at 50% -10%, rgba(0,135,81,0.15) 0%, transparent 60%),
+                        linear-gradient(160deg, #020c06 0%, #041508 40%, #020c06 100%);
+        }
+        .grid-bg {
+            position: fixed; inset: 0; z-index: 0;
+            background-image: linear-gradient(rgba(0,135,81,0.05) 1px, transparent 1px),
+                              linear-gradient(90deg, rgba(0,135,81,0.05) 1px, transparent 1px);
+            background-size: 60px 60px; pointer-events: none;
+        }
+
+        /* ── Layout ── */
+        .page { position: relative; z-index: 1; max-width: 860px; margin: 0 auto; padding: 32px 20px 60px; }
+
+        /* ── Login gate ── */
+        #loginGate {
+            min-height: 100vh; display: flex; align-items: center; justify-content: center;
+        }
+        .login-card {
+            background: var(--panel); border: 1px solid rgba(0,135,81,0.25); border-radius: 20px;
+            padding: 48px 40px; width: 100%; max-width: 400px; text-align: center;
+            box-shadow: 0 0 60px rgba(0,135,81,0.1);
+        }
+        .lock-icon {
+            width: 60px; height: 60px; border-radius: 50%;
+            background: rgba(0,135,81,0.12); border: 1px solid rgba(0,135,81,0.3);
+            display: flex; align-items: center; justify-content: center;
+            font-size: 1.5rem; margin: 0 auto 20px;
+        }
+        .badge-tag {
+            display: inline-block; font-size: 0.58rem; font-weight: 700;
+            letter-spacing: 0.18em; text-transform: uppercase; color: var(--gold);
+            background: rgba(255,193,7,0.1); border: 1px solid rgba(255,193,7,0.2);
+            border-radius: 20px; padding: 3px 12px; margin-bottom: 14px;
+        }
+        .login-card h2 { font-size: 1.3rem; font-weight: 900; margin-bottom: 6px; }
+        .login-card p { font-size: 0.78rem; color: rgba(255,255,255,0.4); margin-bottom: 28px; }
+
+        /* ── Inputs ── */
+        input[type="password"], input[type="text"], input[type="file"] {
+            width: 100%; background: rgba(255,255,255,0.05);
+            border: 1px solid rgba(0,135,81,0.3); border-radius: 10px;
+            color: #fff; font-size: 0.9rem; padding: 12px 16px; outline: none;
+            transition: border-color 0.2s; font-family: 'Inter', sans-serif;
+        }
+        input:focus { border-color: rgba(0,135,81,0.7); }
+        input[type="file"] { cursor: pointer; padding: 10px 14px; }
+        textarea {
+            width: 100%; background: rgba(255,255,255,0.04);
+            border: 1px solid rgba(0,135,81,0.25); border-radius: 10px;
+            color: #fff; font-size: 0.82rem; padding: 12px 14px; outline: none;
+            font-family: 'Inter', monospace; resize: vertical; min-height: 120px;
+            transition: border-color 0.2s;
+        }
+        textarea:focus { border-color: rgba(0,135,81,0.6); }
+
+        /* ── Buttons ── */
+        .btn-primary {
+            background: linear-gradient(135deg, #008751, #00b368); border: none;
+            border-radius: 10px; color: #fff; font-size: 0.9rem; font-weight: 700;
+            padding: 12px 24px; cursor: pointer; width: 100%; transition: opacity 0.2s;
+        }
+        .btn-primary:hover { opacity: 0.88; }
+        .btn-primary:disabled { opacity: 0.45; cursor: not-allowed; }
+        .btn-secondary {
+            background: rgba(255,255,255,0.06); border: 1px solid var(--border);
+            border-radius: 10px; color: rgba(255,255,255,0.7); font-size: 0.82rem;
+            font-weight: 600; padding: 10px 20px; cursor: pointer; transition: background 0.2s;
+        }
+        .btn-secondary:hover { background: rgba(255,255,255,0.1); }
+        .btn-gold {
+            background: rgba(255,193,7,0.12); border: 1px solid rgba(255,193,7,0.3);
+            border-radius: 10px; color: var(--gold); font-size: 0.82rem; font-weight: 700;
+            padding: 10px 20px; cursor: pointer; text-decoration: none; display: inline-block;
+            transition: background 0.2s;
+        }
+        .btn-gold:hover { background: rgba(255,193,7,0.22); }
+
+        /* ── Admin portal ── */
+        #adminPortal { display: none; }
+        .portal-header { margin-bottom: 32px; }
+        .portal-header h1 { font-size: 1.6rem; font-weight: 900; margin-bottom: 6px; }
+        .portal-header p { font-size: 0.82rem; color: rgba(255,255,255,0.4); }
+        .header-row { display: flex; align-items: flex-start; justify-content: space-between; gap: 16px; flex-wrap: wrap; }
+
+        /* ── Cards ── */
+        .card {
+            background: var(--panel); border: 1px solid var(--border);
+            border-radius: 16px; padding: 28px; margin-bottom: 20px;
+        }
+        .card-title {
+            font-size: 0.65rem; font-weight: 700; letter-spacing: 0.15em;
+            text-transform: uppercase; color: var(--gold);
+            border-left: 3px solid var(--gold); padding-left: 10px;
+            margin-bottom: 20px; display: block;
+        }
+
+        /* ── Upload zone ── */
+        .upload-zone {
+            border: 2px dashed rgba(0,135,81,0.3); border-radius: 12px;
+            padding: 36px 20px; text-align: center; cursor: pointer;
+            transition: all 0.2s; background: rgba(0,135,81,0.03); position: relative;
+        }
+        .upload-zone:hover, .upload-zone.drag-over {
+            border-color: rgba(0,135,81,0.7); background: rgba(0,135,81,0.07);
+        }
+        .upload-zone input[type="file"] {
+            position: absolute; inset: 0; opacity: 0; cursor: pointer;
+            width: 100%; height: 100%; border: none; padding: 0;
+        }
+        .upload-icon { font-size: 2rem; margin-bottom: 10px; }
+        .upload-label { font-size: 0.88rem; font-weight: 600; color: rgba(255,255,255,0.7); }
+        .upload-hint { font-size: 0.72rem; color: rgba(255,255,255,0.3); margin-top: 4px; }
+        .file-chosen { font-size: 0.78rem; color: var(--green-light); margin-top: 8px; font-weight: 600; }
+
+        /* ── Preview table ── */
+        .preview-wrap { overflow-x: auto; margin-top: 16px; border-radius: 8px; overflow: hidden; }
+        table { width: 100%; border-collapse: collapse; font-size: 0.78rem; }
+        thead tr { background: rgba(0,135,81,0.15); }
+        th { padding: 8px 12px; text-align: left; color: var(--gold); font-weight: 700;
+             font-size: 0.65rem; letter-spacing: 0.08em; text-transform: uppercase; }
+        tbody tr { border-bottom: 1px solid rgba(255,255,255,0.05); }
+        tbody tr:hover { background: rgba(255,255,255,0.03); }
+        td { padding: 7px 12px; color: rgba(255,255,255,0.75); }
+        td.valid { color: #00cc66; }
+        td.invalid { color: #ff6b6b; }
+        .row-num { color: rgba(255,255,255,0.25); font-size: 0.68rem; }
+
+        /* ── Result banner ── */
+        .result-banner {
+            border-radius: 10px; padding: 14px 18px; margin-top: 16px;
+            font-size: 0.82rem; font-weight: 600; display: none;
+        }
+        .result-banner.success { background: rgba(0,204,102,0.12); border: 1px solid rgba(0,204,102,0.3); color: #00cc66; }
+        .result-banner.error   { background: rgba(255,107,107,0.12); border: 1px solid rgba(255,107,107,0.3); color: #ff6b6b; }
+        .result-banner.info    { background: rgba(255,193,7,0.1); border: 1px solid rgba(255,193,7,0.25); color: var(--gold); }
+
+        /* ── Stats row ── */
+        .stats-row { display: flex; gap: 12px; flex-wrap: wrap; margin-bottom: 20px; }
+        .stat-pill {
+            background: rgba(255,255,255,0.04); border: 1px solid var(--border);
+            border-radius: 10px; padding: 10px 18px; text-align: center; flex: 1; min-width: 80px;
+        }
+        .stat-pill .val { font-size: 1.4rem; font-weight: 900; display: block; }
+        .stat-pill .lbl { font-size: 0.6rem; color: rgba(255,255,255,0.35); text-transform: uppercase; letter-spacing: 0.08em; }
+        .val-green { color: #00cc66; }
+        .val-red   { color: #ff6b6b; }
+        .val-gold  { color: var(--gold); }
+
+        /* ── Error alert ── */
+        .err-box { background: rgba(220,53,69,0.12); border: 1px solid rgba(220,53,69,0.3);
+                   border-radius: 8px; color: #ff6b6b; font-size: 0.78rem; padding: 10px 14px;
+                   margin-bottom: 12px; display: none; }
+        .divider { border: none; border-top: 1px solid var(--border); margin: 24px 0; }
+        label.field-label { display: block; font-size: 0.72rem; font-weight: 600;
+                            color: rgba(255,255,255,0.5); margin-bottom: 6px; }
+    </style>
+</head>
+<body>
+<div class="grid-bg"></div>
+
+<!-- ── Login gate ── -->
+<div id="loginGate">
+    <div class="login-card">
+        <div class="lock-icon">🔐</div>
+        <div class="badge-tag">Admin Portal</div>
+        <h2>Officer Management</h2>
+        <p>Enter your admin key to manage officer phone numbers.</p>
+        <div class="err-box" id="loginErr"></div>
+        <div style="position:relative; margin-bottom:12px;">
+            <input type="password" id="adminKey" placeholder="Enter admin key"
+                   autocomplete="off" onkeydown="if(event.key==='Enter')adminLogin()"
+                   style="padding-right:44px;">
+            <button onclick="togglePwd()" style="position:absolute;right:12px;top:50%;transform:translateY(-50%);
+                background:none;border:none;color:rgba(255,255,255,0.3);cursor:pointer;font-size:1rem;">👁</button>
+        </div>
+        <button class="btn-primary" id="loginBtn" onclick="adminLogin()">Access Admin Portal →</button>
+        <div style="margin-top:16px;"><a href="/" style="font-size:0.72rem;color:rgba(255,255,255,0.25);text-decoration:none;">← Back to home</a></div>
+    </div>
+</div>
+
+<!-- ── Admin portal ── -->
+<div id="adminPortal">
+<div class="page">
+
+    <div class="portal-header">
+        <div class="header-row">
+            <div>
+                <div class="badge-tag">Admin Portal — Officer Management</div>
+                <h1>📋 Officer Phone Numbers</h1>
+                <p>Upload a CSV or paste officer IDs and phone numbers to register them for WhatsApp OTP authentication.</p>
+            </div>
+            <div style="display:flex;gap:8px;flex-wrap:wrap;align-items:center;">
+                <a id="templateDownloadBtn" href="#" onclick="downloadTemplate(event)" class="btn-gold">⬇ Download CSV Template</a>
+                <button class="btn-secondary" onclick="adminLogout()">🔒 Lock</button>
+            </div>
+        </div>
+    </div>
+
+    <!-- ── Stats ── -->
+    <div class="stats-row">
+        <div class="stat-pill"><span class="val val-gold" id="statTotal">—</span><span class="lbl">Total Officers</span></div>
+        <div class="stat-pill"><span class="val val-green" id="statWithPhone">—</span><span class="lbl">With Phone</span></div>
+        <div class="stat-pill"><span class="val val-red" id="statNoPhone">—</span><span class="lbl">Missing Phone</span></div>
+    </div>
+
+    <!-- ── CSV Upload ── -->
+    <div class="card">
+        <span class="card-title">📁 Upload CSV File</span>
+        <div class="upload-zone" id="uploadZone">
+            <input type="file" id="csvFile" accept=".csv,text/csv" onchange="handleFileSelect(this)">
+            <div class="upload-icon">📂</div>
+            <div class="upload-label">Drop your CSV here or click to browse</div>
+            <div class="upload-hint">Required columns: <code>officer_id</code>, <code>phone</code></div>
+            <div class="file-chosen d-none" id="fileChosen"></div>
+        </div>
+
+        <div id="previewSection" style="display:none;">
+            <hr class="divider">
+            <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:12px;">
+                <span style="font-size:0.78rem;color:rgba(255,255,255,0.5);" id="previewLabel"></span>
+                <button class="btn-secondary" onclick="clearFile()" style="padding:6px 14px;font-size:0.72rem;">✕ Clear</button>
+            </div>
+            <div class="preview-wrap"><table id="previewTable"><thead></thead><tbody></tbody></table></div>
+        </div>
+
+        <div class="result-banner" id="uploadResult"></div>
+        <div style="margin-top:16px;">
+            <button class="btn-primary" id="uploadBtn" onclick="submitCSV()" disabled>Upload & Register Officers</button>
+        </div>
+    </div>
+
+    <!-- ── Manual paste ── -->
+    <div class="card">
+        <span class="card-title">✏️ Manual Entry (Paste or Type)</span>
+        <p style="font-size:0.78rem;color:rgba(255,255,255,0.4);margin-bottom:14px;">
+            One officer per line. Format: <code style="color:#00cc66;">WARDCODE-PUCODE,+2348012345678</code>
+        </p>
+        <label class="field-label">Officer entries (officer_id,phone)</label>
+        <textarea id="manualInput" placeholder="WARD001-PU001,+2348012345678&#10;WARD001-PU002,+2348023456789&#10;WARD002-PU001,+2348034567890"></textarea>
+        <div class="result-banner" id="manualResult"></div>
+        <div style="margin-top:14px;">
+            <button class="btn-primary" id="manualBtn" onclick="submitManual()">Register These Officers</button>
+        </div>
+    </div>
+
+</div>
+</div>
+
+<script>
+    let _adminKey = '';
+
+    function togglePwd() {
+        const i = document.getElementById('adminKey');
+        i.type = i.type === 'password' ? 'text' : 'password';
+    }
+
+    async function adminLogin() {
+        const key = document.getElementById('adminKey').value.trim();
+        if (!key) return;
+        const btn = document.getElementById('loginBtn');
+        const err = document.getElementById('loginErr');
+        btn.disabled = true; btn.textContent = 'Verifying...';
+        err.style.display = 'none';
+        // Test key against a protected endpoint
+        try {
+            const res = await fetch('/api/admin/set-officer-phone', {
+                method: 'POST',
+                headers: { 'Authorization': 'Bearer ' + key, 'Content-Type': 'application/json' },
+                body: JSON.stringify({ officers: [] })
+            });
+            if (res.status === 401 || res.status === 403) {
+                err.textContent = 'Invalid admin key.';
+                err.style.display = 'block';
+                btn.disabled = false; btn.textContent = 'Access Admin Portal →';
+                return;
+            }
+            _adminKey = key;
+            document.getElementById('loginGate').style.display = 'none';
+            document.getElementById('adminPortal').style.display = 'block';
+            loadStats();
+        } catch(e) {
+            err.textContent = 'Server error. Try again.';
+            err.style.display = 'block';
+            btn.disabled = false; btn.textContent = 'Access Admin Portal →';
+        }
+    }
+
+    function adminLogout() {
+        _adminKey = '';
+        document.getElementById('adminPortal').style.display = 'none';
+        document.getElementById('loginGate').style.display = 'flex';
+        document.getElementById('adminKey').value = '';
+        document.getElementById('loginBtn').disabled = false;
+        document.getElementById('loginBtn').textContent = 'Access Admin Portal →';
+    }
+
+    async function loadStats() {
+        try {
+            const res = await fetch('/api/admin/officer-stats', {
+                headers: { 'Authorization': 'Bearer ' + _adminKey }
+            });
+            if (!res.ok) return;
+            const d = await res.json();
+            document.getElementById('statTotal').textContent     = d.total.toLocaleString();
+            document.getElementById('statWithPhone').textContent = d.with_phone.toLocaleString();
+            document.getElementById('statNoPhone').textContent   = d.without_phone.toLocaleString();
+        } catch(e) {}
+    }
+
+    // ── CSV file handling ────────────────────────────────────────────────────
+    let _parsedRows = [];
+
+    function handleFileSelect(input) {
+        const file = input.files[0];
+        if (!file) return;
+        document.getElementById('fileChosen').textContent = '📄 ' + file.name;
+        document.getElementById('fileChosen').classList.remove('d-none');
+        const reader = new FileReader();
+        reader.onload = e => parseCSV(e.target.result);
+        reader.readAsText(file);
+    }
+
+    // Drag-and-drop
+    const zone = document.getElementById('uploadZone');
+    zone.addEventListener('dragover', e => { e.preventDefault(); zone.classList.add('drag-over'); });
+    zone.addEventListener('dragleave', () => zone.classList.remove('drag-over'));
+    zone.addEventListener('drop', e => {
+        e.preventDefault(); zone.classList.remove('drag-over');
+        const file = e.dataTransfer.files[0];
+        if (file) { document.getElementById('csvFile').files = e.dataTransfer.files; handleFileSelect({ files: [file] }); }
+    });
+
+    function parseCSV(text) {
+        const lines = text.trim().split(/\\r?\\n/).filter(l => l.trim());
+        if (!lines.length) return;
+        // Detect header row
+        const first = lines[0].toLowerCase();
+        const hasHeader = first.includes('officer_id') || first.includes('phone');
+        const dataLines = hasHeader ? lines.slice(1) : lines;
+        _parsedRows = [];
+        dataLines.forEach((line, i) => {
+            const parts = line.split(',');
+            const officer_id = (parts[0] || '').trim();
+            const phone      = (parts[1] || '').trim();
+            const valid = officer_id.includes('-') && phone.length >= 10;
+            _parsedRows.push({ officer_id, phone, valid, row: i + (hasHeader ? 2 : 1) });
+        });
+        renderPreview();
+        document.getElementById('uploadBtn').disabled = _parsedRows.filter(r => r.valid).length === 0;
+    }
+
+    function renderPreview() {
+        const section = document.getElementById('previewSection');
+        const label   = document.getElementById('previewLabel');
+        const valid   = _parsedRows.filter(r => r.valid).length;
+        const invalid = _parsedRows.filter(r => !r.valid).length;
+        label.innerHTML = `<span style="color:#00cc66;">${valid} valid</span>${invalid ? ` &nbsp;·&nbsp; <span style="color:#ff6b6b;">${invalid} invalid</span>` : ''} &nbsp;·&nbsp; ${_parsedRows.length} total rows`;
+        section.style.display = 'block';
+
+        const thead = document.querySelector('#previewTable thead');
+        const tbody = document.querySelector('#previewTable tbody');
+        thead.innerHTML = '<tr><th>#</th><th>Officer ID</th><th>Phone</th><th>Status</th></tr>';
+        tbody.innerHTML = _parsedRows.slice(0, 50).map(r =>
+            `<tr>
+                <td class="row-num">${r.row}</td>
+                <td class="${r.valid ? 'valid' : 'invalid'}">${r.officer_id || '<em>empty</em>'}</td>
+                <td class="${r.valid ? 'valid' : 'invalid'}">${r.phone || '<em>empty</em>'}</td>
+                <td>${r.valid ? '✅ OK' : '⚠️ Invalid'}</td>
+            </tr>`
+        ).join('') + (_parsedRows.length > 50 ? `<tr><td colspan="4" style="color:rgba(255,255,255,0.3);text-align:center;padding:10px;">... and ${_parsedRows.length - 50} more rows</td></tr>` : '');
+    }
+
+    function clearFile() {
+        _parsedRows = [];
+        document.getElementById('csvFile').value = '';
+        document.getElementById('fileChosen').classList.add('d-none');
+        document.getElementById('previewSection').style.display = 'none';
+        document.getElementById('uploadBtn').disabled = true;
+        document.getElementById('uploadResult').style.display = 'none';
+    }
+
+    async function submitCSV() {
+        const valid = _parsedRows.filter(r => r.valid);
+        if (!valid.length) return;
+        const btn = document.getElementById('uploadBtn');
+        const res_el = document.getElementById('uploadResult');
+        btn.disabled = true; btn.textContent = `Uploading ${valid.length} officers...`;
+        res_el.style.display = 'none';
+        await _submitOfficers(valid, res_el);
+        btn.disabled = false; btn.textContent = 'Upload & Register Officers';
+        loadStats();
+    }
+
+    // ── Manual entry ─────────────────────────────────────────────────────────
+    async function submitManual() {
+        const raw = document.getElementById('manualInput').value.trim();
+        if (!raw) return;
+        const btn   = document.getElementById('manualBtn');
+        const res_el = document.getElementById('manualResult');
+        const lines = raw.split(/\\n/).filter(l => l.trim());
+        const officers = lines.map(l => {
+            const p = l.split(',');
+            return { officer_id: (p[0] || '').trim(), phone: (p[1] || '').trim() };
+        }).filter(o => o.officer_id && o.phone);
+        if (!officers.length) {
+            showBanner(res_el, 'No valid entries found. Format: WARDCODE-PUCODE,+2348012345678', 'error');
+            return;
+        }
+        btn.disabled = true; btn.textContent = `Registering ${officers.length} officers...`;
+        res_el.style.display = 'none';
+        await _submitOfficers(officers, res_el);
+        btn.disabled = false; btn.textContent = 'Register These Officers';
+        loadStats();
+    }
+
+    // ── Shared submit ────────────────────────────────────────────────────────
+    async function _submitOfficers(officers, res_el) {
+        try {
+            const res = await fetch('/api/admin/set-officer-phone', {
+                method: 'POST',
+                headers: { 'Authorization': 'Bearer ' + _adminKey, 'Content-Type': 'application/json' },
+                body: JSON.stringify({ officers })
+            });
+            const out = await res.json();
+            if (!res.ok) {
+                showBanner(res_el, out.detail || 'Upload failed.', 'error');
+                return;
+            }
+            const msg = `✅ ${out.updated} officer${out.updated !== 1 ? 's' : ''} registered successfully` +
+                        (out.skipped ? ` · ${out.skipped} skipped (ID not found in Osun DB)` : '');
+            showBanner(res_el, msg, 'success');
+        } catch(e) {
+            showBanner(res_el, 'Server error. Try again.', 'error');
+        }
+    }
+
+    function showBanner(el, msg, type) {
+        el.textContent = msg;
+        el.className = 'result-banner ' + type;
+        el.style.display = 'block';
+    }
+
+    async function downloadTemplate(e) {
+        e.preventDefault();
+        const res = await fetch('/admin/template.csv', {
+            headers: { 'Authorization': 'Bearer ' + _adminKey }
+        });
+        if (!res.ok) { alert('Could not download template'); return; }
+        const blob = await res.blob();
+        const url  = URL.createObjectURL(blob);
+        const a    = document.createElement('a');
+        a.href = url; a.download = 'officer_phones_template.csv'; a.click();
+        URL.revokeObjectURL(url);
+    }
+
+    document.addEventListener('DOMContentLoaded', () => {
+        document.getElementById('adminKey').focus();
+    });
+</script>
+</body>
+</html>
+"""
+
+# ── Admin portal ─────────────────────────────────────────────────────────────
+@app.get("/admin", response_class=HTMLResponse)
+async def admin_page(request: Request):
+    """Protected admin portal — requires DASHBOARD_KEY as Bearer token via
+    a login form (same key as dashboard). Served as a standalone HTML page."""
+    return HTMLResponse(content=ADMIN_HTML)
+
+
+@app.get("/admin/template.csv")
+async def download_template(request: Request):
+    """Download the officer phone CSV template."""
+    auth = request.headers.get("Authorization", "")
+    # Also allow cookie-authenticated dashboard users
+    token = request.cookies.get("ds_session")
+    header_ok = auth.startswith("Bearer ") and secrets.compare_digest(
+        hashlib.sha256(auth.split(" ", 1)[1].strip().encode()).hexdigest(),
+        _DASHBOARD_KEY_HASH
+    )
+    if not header_ok and not _is_valid_token(token):
+        raise HTTPException(status_code=403, detail="Not authorised")
+    csv_content = (
+        "officer_id,phone\n"
+        "WARD001-PU001,+2348012345678\n"
+        "WARD001-PU002,+2348023456789\n"
+        "WARD002-PU001,+2348034567890\n"
+    )
+    from fastapi.responses import Response as _R
+    return _R(
+        content=csv_content,
+        media_type="text/csv",
+        headers={"Content-Disposition": "attachment; filename=officer_phones_template.csv"}
+    )
+# ─────────────────────────────────────────────────────────────────────────────
 
 @app.get("/", response_class=HTMLResponse)
 async def homepage():
@@ -1453,12 +2304,32 @@ async def vote_form():
 <body>
     <nav class="navbar py-2 mb-4 text-center"><h5>IMOLE YOUTH ACCORD MOBILIZATION OFFICIAL FIELD COLLATION</h5></nav>
     <div class="container pb-5" style="max-width: 850px;">
-        <div id="loginArea" class="card p-5 text-center mx-auto" style="max-width: 400px;">
-            <h6>Enter Officer ID</h6>
-            <input type="text" id="oid" class="form-control mb-3 text-center" placeholder="WARDCODE-PUCODE">
-            <!-- BUG FIX #1: Added missing loginError div -->
-            <div id="loginError" class="alert alert-danger d-none small py-2 mb-2"></div>
-            <button class="btn btn-success w-100" onclick="start()">Validate Access</button>
+        <!-- ── Step 1: Officer ID ── -->
+        <div id="step1Area" class="card p-5 text-center mx-auto" style="max-width: 420px;">
+            <div style="width:56px;height:56px;border-radius:50%;background:rgba(0,135,81,0.12);border:1px solid rgba(0,135,81,0.3);display:flex;align-items:center;justify-content:center;font-size:1.4rem;margin:0 auto 16px;">🗳️</div>
+            <div style="font-size:0.6rem;font-weight:700;letter-spacing:0.15em;color:#ffc107;background:rgba(255,193,7,0.1);border:1px solid rgba(255,193,7,0.2);border-radius:20px;padding:3px 12px;display:inline-block;margin-bottom:14px;text-transform:uppercase;">Step 1 of 2 — Officer Verification</div>
+            <h6 class="fw-bold mb-1">Enter Your Officer ID</h6>
+            <p class="small text-muted mb-3">Your unique WARDCODE-PUCODE assignment</p>
+            <input type="text" id="oid" class="form-control mb-2 text-center fw-bold" placeholder="WARDCODE-PUCODE" autocomplete="off" style="letter-spacing:0.08em;" onkeydown="if(event.key==='Enter')requestOTP()">
+            <div id="step1Error" class="alert alert-danger d-none small py-2 mb-2"></div>
+            <button class="btn btn-success w-100 fw-bold" id="step1Btn" onclick="requestOTP()">Send OTP to My WhatsApp →</button>
+        </div>
+
+        <!-- ── Step 2: OTP verification ── -->
+        <div id="step2Area" class="card p-5 text-center mx-auto d-none" style="max-width: 420px;">
+            <div style="width:56px;height:56px;border-radius:50%;background:rgba(0,135,81,0.12);border:1px solid rgba(0,135,81,0.3);display:flex;align-items:center;justify-content:center;font-size:1.4rem;margin:0 auto 16px;">📱</div>
+            <div style="font-size:0.6rem;font-weight:700;letter-spacing:0.15em;color:#ffc107;background:rgba(255,193,7,0.1);border:1px solid rgba(255,193,7,0.2);border-radius:20px;padding:3px 12px;display:inline-block;margin-bottom:14px;text-transform:uppercase;">Step 2 of 2 — OTP Verification</div>
+            <h6 class="fw-bold mb-1">Check Your WhatsApp</h6>
+            <p class="small text-muted mb-1">A 6-digit code was sent to</p>
+            <p class="fw-bold mb-3" id="phoneHintDisplay" style="color:#008751;font-size:1rem;letter-spacing:0.1em;">+234***0000</p>
+            <input type="text" id="otpInput" class="form-control mb-2 text-center fw-bold" placeholder="000000" maxlength="6" inputmode="numeric" autocomplete="one-time-code" style="font-size:1.4rem;letter-spacing:0.3em;" onkeydown="if(event.key==='Enter')verifyOTP()">
+            <div id="step2Error" class="alert alert-danger d-none small py-2 mb-2"></div>
+            <button class="btn btn-success w-100 fw-bold mb-2" id="step2Btn" onclick="verifyOTP()">Verify OTP &amp; Unlock Form →</button>
+            <div class="d-flex justify-content-between align-items-center">
+                <button class="btn btn-link btn-sm text-muted p-0" onclick="backToStep1()">← Change ID</button>
+                <button class="btn btn-link btn-sm p-0" id="resendBtn" onclick="resendOTP()" style="color:#008751;">Resend OTP</button>
+            </div>
+            <div id="resendCountdown" class="small text-muted mt-1 d-none"></div>
         </div>
 
         <div id="formArea" class="d-none">
@@ -1549,42 +2420,131 @@ async def vote_form():
     <script src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/js/bootstrap.bundle.min.js"></script>
 
     <script>
-        let lat = null, lon = null, officerId, puData = [], wardData = [], pendingPayload = null;
+        let lat = null, lon = null, officerId, submitToken = null, pendingPayload = null;
+        let _resendTimer = null;
 
-        async function start() {{
-            const rawId = document.getElementById('oid').value.trim();
-            if(!rawId) return;
-            const btn = document.querySelector('#loginArea button');
-            const errEl = document.getElementById('loginError');
-            btn.disabled = true; btn.innerText = 'Validating...';
+        // ── Step 1: request OTP ──────────────────────────────────────────────
+        async function requestOTP() {{
+            const rawId = document.getElementById('oid').value.trim().toUpperCase();
+            if (!rawId) return;
+            const btn  = document.getElementById('step1Btn');
+            const errEl = document.getElementById('step1Error');
+            btn.disabled = true; btn.innerText = 'Sending OTP...';
             errEl.classList.add('d-none');
             try {{
-                const res = await fetch('/api/validate_officer/' + encodeURIComponent(rawId));
+                const res = await fetch('/api/request-otp', {{
+                    method: 'POST',
+                    headers: {{'Content-Type': 'application/json'}},
+                    body: JSON.stringify({{ officer_id: rawId }})
+                }});
                 const out = await res.json();
-                if(!out.valid) {{
-                    errEl.innerText = out.message;
+                if (!res.ok) {{
+                    errEl.innerText = out.detail || 'Error. Try again.';
                     errEl.classList.remove('d-none');
-                    btn.disabled = false; btn.innerText = 'Validate Access';
+                    btn.disabled = false; btn.innerText = 'Send OTP to My WhatsApp →';
                     return;
                 }}
+                if (out.status === 'no_phone') {{
+                    errEl.innerText = out.message;
+                    errEl.classList.remove('d-none');
+                    btn.disabled = false; btn.innerText = 'Send OTP to My WhatsApp →';
+                    return;
+                }}
+                // OTP sent — move to step 2
                 officerId = rawId;
-                // Auto-fill all PU fields from validation response
-                document.getElementById('s').value   = (out.state  || 'osun').toUpperCase();
-                document.getElementById('l').value   = (out.lg     || '').toUpperCase();
-                document.getElementById('w').value   = (out.ward   || '').toUpperCase();
-                document.getElementById('wc').value  = out.ward_code || '';
-                document.getElementById('pc').value  = out.pu_code   || '';
-                document.getElementById('loc').value = (out.location || '').toUpperCase();
-                document.getElementById('loginArea').classList.add('d-none');
-                document.getElementById('formArea').classList.remove('d-none');
+                document.getElementById('phoneHintDisplay').innerText = out.phone_hint;
+                document.getElementById('step1Area').classList.add('d-none');
+                document.getElementById('step2Area').classList.remove('d-none');
+                document.getElementById('otpInput').focus();
+                startResendCountdown(60);
             }} catch(e) {{
                 errEl.innerText = 'Server error. Try again.';
                 errEl.classList.remove('d-none');
-                btn.disabled = false; btn.innerText = 'Validate Access';
+                btn.disabled = false; btn.innerText = 'Send OTP to My WhatsApp →';
             }}
         }}
 
-        // PU fields are now auto-filled from validate_officer — no manual dropdowns needed
+        // ── Step 2: verify OTP ───────────────────────────────────────────────
+        async function verifyOTP() {{
+            const otp   = document.getElementById('otpInput').value.trim();
+            if (!otp || otp.length !== 6) return;
+            const btn   = document.getElementById('step2Btn');
+            const errEl = document.getElementById('step2Error');
+            btn.disabled = true; btn.innerText = 'Verifying...';
+            errEl.classList.add('d-none');
+            try {{
+                const res = await fetch('/api/verify-otp', {{
+                    method: 'POST',
+                    headers: {{'Content-Type': 'application/json'}},
+                    body: JSON.stringify({{ officer_id: officerId, otp }})
+                }});
+                const out = await res.json();
+                if (!res.ok) {{
+                    errEl.innerText = out.detail || 'Incorrect OTP.';
+                    errEl.classList.remove('d-none');
+                    btn.disabled = false; btn.innerText = 'Verify OTP & Unlock Form →';
+                    return;
+                }}
+                // ✅ Auth complete — store token, fill PU fields, show form
+                submitToken = out.token;
+                document.getElementById('s').value   = (out.state    || 'osun').toUpperCase();
+                document.getElementById('l').value   = (out.lg       || '').toUpperCase();
+                document.getElementById('w').value   = (out.ward     || '').toUpperCase();
+                document.getElementById('wc').value  = out.ward_code || '';
+                document.getElementById('pc').value  = out.pu_code   || '';
+                document.getElementById('loc').value = (out.location || '').toUpperCase();
+                document.getElementById('step2Area').classList.add('d-none');
+                document.getElementById('formArea').classList.remove('d-none');
+                if (_resendTimer) clearInterval(_resendTimer);
+            }} catch(e) {{
+                errEl.innerText = 'Server error. Try again.';
+                errEl.classList.remove('d-none');
+                btn.disabled = false; btn.innerText = 'Verify OTP & Unlock Form →';
+            }}
+        }}
+
+        // ── Resend OTP ───────────────────────────────────────────────────────
+        async function resendOTP() {{
+            document.getElementById('resendBtn').disabled = true;
+            document.getElementById('otpInput').value = '';
+            document.getElementById('step2Error').classList.add('d-none');
+            // Re-use requestOTP logic — put ID back and call it
+            document.getElementById('step2Area').classList.add('d-none');
+            document.getElementById('step1Area').classList.remove('d-none');
+            document.getElementById('step1Btn').disabled = false;
+            document.getElementById('step1Btn').innerText = 'Send OTP to My WhatsApp →';
+            await requestOTP();
+        }}
+
+        function backToStep1() {{
+            if (_resendTimer) clearInterval(_resendTimer);
+            document.getElementById('step2Area').classList.add('d-none');
+            document.getElementById('step1Area').classList.remove('d-none');
+            document.getElementById('step1Btn').disabled = false;
+            document.getElementById('step1Btn').innerText = 'Send OTP to My WhatsApp →';
+            document.getElementById('step1Error').classList.add('d-none');
+        }}
+
+        function startResendCountdown(seconds) {{
+            const btn = document.getElementById('resendBtn');
+            const cd  = document.getElementById('resendCountdown');
+            btn.disabled = true;
+            cd.classList.remove('d-none');
+            let remaining = seconds;
+            cd.innerText = `Resend available in ${{remaining}}s`;
+            _resendTimer = setInterval(() => {{
+                remaining--;
+                if (remaining <= 0) {{
+                    clearInterval(_resendTimer);
+                    btn.disabled = false;
+                    cd.classList.add('d-none');
+                }} else {{
+                    cd.innerText = `Resend available in ${{remaining}}s`;
+                }}
+            }}, 1000);
+        }}
+
+        // PU fields are now auto-filled from verify-otp — no manual dropdowns needed
         function calculateTotals() {{
             let valid = 0;
             document.querySelectorAll('.party-v').forEach(i => valid += parseInt(i.value || 0));
@@ -1644,7 +2604,8 @@ async def vote_form():
             const v = {{}};
             document.querySelectorAll('.party-v').forEach(i => v[i.dataset.p] = parseInt(i.value || 0));
             pendingPayload = {{
-                officer_id: officerId, state: document.getElementById('s').value, lg: document.getElementById('l').value,
+                officer_id: officerId, submit_token: submitToken,
+                state: document.getElementById('s').value, lg: document.getElementById('l').value,
                 ward: document.getElementById('w').value, ward_code: document.getElementById('wc').value,
                 pu_code: document.getElementById('pc').value, location: document.getElementById('loc').value,
                 reg_voters: parseInt(document.getElementById('rv').value || 0), total_accredited: parseInt(document.getElementById('ta').value || 0),
