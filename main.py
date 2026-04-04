@@ -22,7 +22,7 @@ def send_whatsapp_alert(payload: dict):
         account_sid = os.environ.get("TWILIO_ACCOUNT_SID", "")
         auth_token  = os.environ.get("TWILIO_AUTH_TOKEN", "")
         from_number = os.environ.get("TWILIO_WHATSAPP_FROM", "+14155238886")
-        recipients_env = os.environ.get("WHATSAPP_RECIPIENTS", "+2349160420100,+2349039587686")
+        recipients_env = os.environ.get("WHATSAPP_RECIPIENTS", "+2349160420100")
         to_numbers = [f"whatsapp:{n.strip()}" for n in recipients_env.split(",")]
         if not account_sid or not auth_token:
             logger.warning("Twilio credentials not set — WhatsApp alert skipped.")
@@ -59,6 +59,50 @@ def send_whatsapp_alert(payload: dict):
                 logger.error(f"Failed to send to {to_number}: {sms_err}")
     except Exception as e:
         logger.error(f"WhatsApp alert failed: {type(e).__name__}: {e}", exc_info=True)
+
+
+# --- INCIDENT WHATSAPP ALERT ---
+def send_incident_alert(payload: dict):
+    try:
+        from twilio.rest import Client
+        account_sid = os.environ.get("TWILIO_ACCOUNT_SID", "")
+        auth_token  = os.environ.get("TWILIO_AUTH_TOKEN", "")
+        from_number = os.environ.get("TWILIO_WHATSAPP_FROM", "+14155238886")
+        recipients_env = os.environ.get("WHATSAPP_RECIPIENTS", "+2349160420100")
+        to_numbers = [f"whatsapp:{n.strip()}" for n in recipients_env.split(",")]
+        if not account_sid or not auth_token:
+            logger.warning("Twilio credentials not set — incident alert skipped.")
+            return
+
+        severity = payload.get("severity", "Unknown").upper()
+        severity_icon = {"CRITICAL": "🔴", "MEDIUM": "🟡", "LOW": "🟢"}.get(severity, "⚪")
+
+        msg = (
+            f"🚨 *INCIDENT REPORT ALERT*\n"
+            f"━━━━━━━━━━━━━━━━━━\n"
+            f"{severity_icon} *Severity:* {severity}\n"
+            f"⚠️ *Type:* {payload.get('incident_type', 'N/A')}\n"
+            f"━━━━━━━━━━━━━━━━━━\n"
+            f"📍 *PU:* {payload.get('location', 'N/A')}\n"
+            f"🏛 *Ward:* {payload.get('ward', 'N/A')} | *LGA:* {payload.get('lg', 'N/A')}\n"
+            f"🔑 *PU Code:* {payload.get('pu_code', 'N/A')}\n"
+            f"👤 *Officer:* {payload.get('officer_id', 'N/A')}\n"
+            f"━━━━━━━━━━━━━━━━━━\n"
+            f"📝 *Description:*\n{payload.get('description', 'N/A')}\n"
+            f"━━━━━━━━━━━━━━━━━━\n"
+            f"🕐 {payload.get('timestamp', '')}\n"
+            f"_Powered by Popson Geospatial Services_"
+        )
+
+        client = Client(account_sid, auth_token)
+        for to_number in to_numbers:
+            try:
+                client.messages.create(from_=f"whatsapp:{from_number}", to=to_number, body=msg)
+                logger.info(f"✅ Incident alert sent to {to_number}")
+            except Exception as sms_err:
+                logger.error(f"Failed to send incident alert to {to_number}: {sms_err}")
+    except Exception as e:
+        logger.error(f"Incident alert failed: {type(e).__name__}: {e}", exc_info=True)
 
 # --- CONFIGURATION ---
 logging.basicConfig(level=logging.INFO)
@@ -193,9 +237,32 @@ def init_db():
             cur.execute("ALTER TABLE field_submissions ADD COLUMN ec8e_image TEXT")
         except Exception:
             pass  # Column already exists — fine
+
+        # ── Incidents table ────────────────────────────────────────────────────
+        cur.execute("""
+            CREATE TABLE IF NOT EXISTS incidents (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                officer_id TEXT,
+                pu_code TEXT,
+                ward TEXT,
+                ward_code TEXT,
+                lg TEXT,
+                state TEXT,
+                location TEXT,
+                incident_type TEXT,
+                severity TEXT,
+                description TEXT,
+                evidence_url TEXT,
+                lat REAL,
+                lon REAL,
+                timestamp TEXT,
+                status TEXT DEFAULT 'open'
+            )
+        """)
+
         conn.commit()
         conn.close()
-        print("✅ Table ready")
+        print("✅ Tables ready")
     except Exception as e:
         print(f"❌ DB INIT ERROR: {e}")
 
@@ -884,7 +951,586 @@ async def index():
 </html>
 """
 
+
+# ── INCIDENT REPORT FORM ──────────────────────────────────────────────────────
+@app.get("/report", response_class=HTMLResponse)
+async def report_page():
+    return HTMLResponse(content=REPORT_HTML)
+
+REPORT_HTML = """
+<!DOCTYPE html>
+<html>
+<head>
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+    <meta name="mobile-web-app-capable" content="yes">
+    <meta name="apple-mobile-web-app-capable" content="yes">
+    <meta name="theme-color" content="#cc0000">
+    <title>ACCORD — INCIDENT REPORT</title>
+    <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/css/bootstrap.min.css" rel="stylesheet">
+    <style>
+        body { background: linear-gradient(rgba(0,0,0,0.7), rgba(0,0,0,0.7)), url('/static/bg.png'); background-size: cover; background-position: center; background-attachment: fixed; min-height: 100vh; margin: 0; }
+        .navbar { background: rgba(180,0,0,0.92) !important; backdrop-filter: blur(10px); color: white; border-bottom: 4px solid #ff6600; }
+        .card { background: rgba(255,255,255,0.96) !important; border-radius: 12px; border: none; box-shadow: 0 10px 30px rgba(0,0,0,0.4) !important; margin-bottom: 20px; color: #222; }
+        .section-label { font-size: 0.75rem; font-weight: bold; color: #cc0000; text-transform: uppercase; border-left: 3px solid #ff6600; padding-left: 10px; margin-bottom: 15px; display: block; }
+        .severity-btn { border: 2px solid #ddd; border-radius: 8px; padding: 10px; cursor: pointer; text-align: center; transition: all 0.2s; background: #fff; }
+        .severity-btn.active-low { border-color: #28a745; background: #d4edda; }
+        .severity-btn.active-medium { border-color: #ffc107; background: #fff3cd; }
+        .severity-btn.active-critical { border-color: #dc3545; background: #f8d7da; }
+        #loginArea { margin-top: 100px; }
+        @media (max-width: 768px) {
+            body { background-attachment: scroll; }
+            .navbar h5 { font-size: 0.75rem; }
+            #loginArea { margin-top: 50px; }
+            .form-control, .form-select { min-height: 48px !important; font-size: 1rem !important; border-radius: 10px !important; }
+            .btn-lg { min-height: 56px !important; font-size: 1.05rem !important; border-radius: 14px !important; }
+        }
+    </style>
+</head>
+<body>
+<nav class="navbar py-2 mb-4 text-center"><h5>⚠️ ACCORD INCIDENT REPORTING SYSTEM</h5></nav>
+<div class="container pb-5" style="max-width: 750px;">
+
+    <div id="loginArea" class="card p-5 text-center mx-auto" style="max-width: 400px;">
+        <h6 class="text-danger fw-bold">🔐 Officer Verification</h6>
+        <p class="small text-muted mb-3">Enter your Officer ID to report an incident</p>
+        <input type="text" id="oid" class="form-control mb-3 text-center" placeholder="WARDCODE-PUCODE">
+        <div id="loginError" class="alert alert-danger d-none small py-2 mb-2"></div>
+        <button class="btn btn-danger w-100 fw-bold" onclick="startReport()">Verify & Continue</button>
+        <div class="mt-3">
+            <a href="/" class="small text-muted">← Back to Vote Submission</a>
+        </div>
+    </div>
+
+    <div id="formArea" class="d-none">
+
+        <div class="card p-4">
+            <span class="section-label">1. Officer & Location</span>
+            <div class="row g-2">
+                <div class="col-6"><small class="text-muted">Officer ID</small><input type="text" id="disp_officer" class="form-control" readonly></div>
+                <div class="col-6"><small class="text-muted">PU Code</small><input type="text" id="disp_pu" class="form-control" readonly></div>
+                <div class="col-12"><small class="text-muted">Polling Unit</small><input type="text" id="disp_loc" class="form-control" readonly></div>
+                <div class="col-6"><small class="text-muted">Ward</small><input type="text" id="disp_ward" class="form-control" readonly></div>
+                <div class="col-6"><small class="text-muted">LGA</small><input type="text" id="disp_lg" class="form-control" readonly></div>
+            </div>
+        </div>
+
+        <div class="card p-4">
+            <span class="section-label">2. Incident Type</span>
+            <select id="incident_type" class="form-select">
+                <option value="">-- Select Incident Type --</option>
+                <option value="Violence / security threat">⚔️ Violence / Security Threat</option>
+                <option value="Ballot box snatching">🗳️ Ballot Box Snatching</option>
+                <option value="INEC official misconduct">🏛️ INEC Official Misconduct</option>
+                <option value="Voter intimidation">😰 Voter Intimidation</option>
+                <option value="Equipment failure (BVAS etc)">🖥️ Equipment Failure (BVAS etc)</option>
+                <option value="Other irregularities">⚠️ Other Irregularities</option>
+            </select>
+        </div>
+
+        <div class="card p-4">
+            <span class="section-label">3. Severity Level</span>
+            <div class="row g-2">
+                <div class="col-4">
+                    <div class="severity-btn" id="btn-low" onclick="setSeverity('Low')">
+                        <div style="font-size:1.5rem;">🟢</div>
+                        <div class="fw-bold small">LOW</div>
+                        <div style="font-size:0.65rem; color:#666;">Minor issue</div>
+                    </div>
+                </div>
+                <div class="col-4">
+                    <div class="severity-btn" id="btn-medium" onclick="setSeverity('Medium')">
+                        <div style="font-size:1.5rem;">🟡</div>
+                        <div class="fw-bold small">MEDIUM</div>
+                        <div style="font-size:0.65rem; color:#666;">Needs attention</div>
+                    </div>
+                </div>
+                <div class="col-4">
+                    <div class="severity-btn" id="btn-critical" onclick="setSeverity('Critical')">
+                        <div style="font-size:1.5rem;">🔴</div>
+                        <div class="fw-bold small">CRITICAL</div>
+                        <div style="font-size:0.65rem; color:#666;">Urgent response</div>
+                    </div>
+                </div>
+            </div>
+            <input type="hidden" id="severity_val" value="">
+        </div>
+
+        <div class="card p-4">
+            <span class="section-label">4. Description</span>
+            <textarea id="description" class="form-control" rows="4" placeholder="Describe what happened in detail — who, what, when, how many people involved..."></textarea>
+        </div>
+
+        <div class="card p-4">
+            <span class="section-label">5. Evidence (Photo / Video)</span>
+            <label class="form-label small text-muted">Attach photo or video evidence (optional but strongly recommended)</label>
+            <input type="file" id="evidenceFile" accept="image/*,video/*" capture="environment" class="form-control bg-dark text-white border-secondary">
+            <div id="evidencePreview" class="mt-2 text-center d-none">
+                <img id="evidenceImg" src="#" alt="Preview" style="max-width:100%;max-height:200px;border-radius:8px;border:2px solid #ff6600;">
+            </div>
+        </div>
+
+        <button class="btn btn-outline-dark w-100 mb-2" onclick="getGPS()">
+            <span id="gpsLabel">📍 Fix GPS Location (Recommended)</span>
+        </button>
+        <div id="gpsWarning" class="alert alert-warning d-none small py-2 mb-2">
+            ⚠️ GPS not captured. You can still submit.
+        </div>
+
+        <div id="submitError" class="alert alert-danger d-none small py-2 mb-2 fw-bold"></div>
+        <button class="btn btn-danger btn-lg w-100 py-3 fw-bold" onclick="submitIncident()">🚨 SUBMIT INCIDENT REPORT</button>
+        <div class="mt-3 text-center">
+            <a href="/" class="small text-white">← Back to Vote Submission</a>
+        </div>
+    </div>
+</div>
+
+<script src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/js/bootstrap.bundle.min.js"></script>
+<script>
+    let lat = null, lon = null, officerData = {};
+
+    async function startReport() {
+        const rawId = document.getElementById('oid').value.trim();
+        if (!rawId) return;
+        const btn = document.querySelector('#loginArea button');
+        const errEl = document.getElementById('loginError');
+        btn.disabled = true; btn.innerText = 'Verifying...';
+        errEl.classList.add('d-none');
+        try {
+            const res = await fetch('/api/validate_officer/' + encodeURIComponent(rawId));
+            const out = await res.json();
+            if (!out.valid) {
+                errEl.innerText = out.message;
+                errEl.classList.remove('d-none');
+                btn.disabled = false; btn.innerText = 'Verify & Continue';
+                return;
+            }
+            officerData = out;
+            officerData.officer_id = rawId;
+            document.getElementById('disp_officer').value = rawId;
+            document.getElementById('disp_pu').value = out.pu_code || '';
+            document.getElementById('disp_loc').value = out.location || '';
+            document.getElementById('disp_ward').value = out.ward || '';
+            document.getElementById('disp_lg').value = out.lg || '';
+            document.getElementById('loginArea').classList.add('d-none');
+            document.getElementById('formArea').classList.remove('d-none');
+        } catch (e) {
+            errEl.innerText = 'Server error. Try again.';
+            errEl.classList.remove('d-none');
+            btn.disabled = false; btn.innerText = 'Verify & Continue';
+        }
+    }
+
+    function setSeverity(level) {
+        document.getElementById('severity_val').value = level;
+        ['low','medium','critical'].forEach(l => {
+            const btn = document.getElementById('btn-' + l);
+            btn.className = 'severity-btn' + (l === level.toLowerCase() ? ' active-' + l : '');
+        });
+    }
+
+    function getGPS() {
+        navigator.geolocation.getCurrentPosition(
+            pos => {
+                lat = pos.coords.latitude;
+                lon = pos.coords.longitude;
+                document.getElementById('gpsLabel').innerText = `✅ GPS Fixed (${lat.toFixed(4)}, ${lon.toFixed(4)})`;
+                document.getElementById('gpsWarning').classList.add('d-none');
+            },
+            () => { document.getElementById('gpsWarning').classList.remove('d-none'); }
+        );
+    }
+
+    document.addEventListener('DOMContentLoaded', function() {
+        const ef = document.getElementById('evidenceFile');
+        if (ef) {
+            ef.addEventListener('change', function() {
+                const file = this.files[0];
+                if (file && file.type.startsWith('image/')) {
+                    const reader = new FileReader();
+                    reader.onload = e => {
+                        document.getElementById('evidenceImg').src = e.target.result;
+                        document.getElementById('evidencePreview').classList.remove('d-none');
+                    };
+                    reader.readAsDataURL(file);
+                }
+            });
+        }
+    });
+
+    async function submitIncident() {
+        const errEl = document.getElementById('submitError');
+        errEl.classList.add('d-none');
+
+        const incident_type = document.getElementById('incident_type').value;
+        const severity = document.getElementById('severity_val').value;
+        const description = document.getElementById('description').value.trim();
+
+        if (!incident_type) { errEl.innerText = 'Please select an incident type.'; errEl.classList.remove('d-none'); return; }
+        if (!severity) { errEl.innerText = 'Please select a severity level.'; errEl.classList.remove('d-none'); return; }
+        if (!description) { errEl.innerText = 'Please describe the incident.'; errEl.classList.remove('d-none'); return; }
+
+        const btn = document.querySelector('button.btn-danger.btn-lg');
+        btn.disabled = true; btn.innerText = 'Submitting...';
+
+        const payload = {
+            officer_id: officerData.officer_id,
+            pu_code: officerData.pu_code,
+            ward: officerData.ward,
+            ward_code: officerData.ward_code || '',
+            lg: officerData.lg,
+            state: officerData.state || 'osun',
+            location: officerData.location,
+            incident_type, severity, description, lat, lon
+        };
+
+        const fd = new FormData();
+        fd.append('data', JSON.stringify(payload));
+        const ef = document.getElementById('evidenceFile');
+        if (ef && ef.files[0]) fd.append('evidence', ef.files[0]);
+
+        try {
+            const res = await fetch('/submit-incident', { method: 'POST', body: fd });
+            const out = await res.json();
+            alert(out.message);
+            if (out.status === 'success') {
+                document.getElementById('incident_type').value = '';
+                document.getElementById('severity_val').value = '';
+                document.getElementById('description').value = '';
+                document.getElementById('evidencePreview').classList.add('d-none');
+                ['low','medium','critical'].forEach(l => { document.getElementById('btn-'+l).className = 'severity-btn'; });
+                btn.disabled = false; btn.innerText = '🚨 SUBMIT INCIDENT REPORT';
+            } else {
+                btn.disabled = false; btn.innerText = '🚨 SUBMIT INCIDENT REPORT';
+            }
+        } catch (e) {
+            errEl.innerText = 'Server error. Try again.';
+            errEl.classList.remove('d-none');
+            btn.disabled = false; btn.innerText = '🚨 SUBMIT INCIDENT REPORT';
+        }
+    }
+</script>
+</body>
+</html>
+"""
+# ─────────────────────────────────────────────────────────────────────────────
+
 # --- DASHBOARD PAGE ---
+# ── INCIDENT DASHBOARD ────────────────────────────────────────────────────────
+@app.get("/incident-dashboard", response_class=HTMLResponse)
+async def incident_dashboard_page():
+    return HTMLResponse(content=INCIDENT_DASHBOARD_HTML, headers={
+        "X-Frame-Options": "ALLOWALL",
+        "Content-Security-Policy": "frame-ancestors *"
+    })
+
+INCIDENT_DASHBOARD_HTML = """
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>ACCORD — Incident Command Dashboard</title>
+    <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/css/bootstrap.min.css" rel="stylesheet">
+    <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" />
+    <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/bootstrap-icons@1.11.1/font/bootstrap-icons.css">
+    <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
+    <style>
+        :root { --red: #cc0000; --orange: #ff6600; --gold: #ffc107; --dark: #0a0a0a; --panel: #141414; }
+        body { background: var(--dark); color: #fff; font-family: 'Segoe UI', sans-serif; margin: 0; overflow-y: auto; }
+
+        .navbar-custom { background: #1a0000; border-bottom: 3px solid var(--red); padding: 10px 20px; display: flex; align-items: center; justify-content: space-between; flex-wrap: wrap; gap: 10px; }
+        .brand-title { color: var(--red); font-weight: 900; font-size: 1.1rem; letter-spacing: 1px; }
+
+        .kpi-row { display: grid; grid-template-columns: repeat(4, 1fr); gap: 10px; padding: 10px; }
+        .kpi-card { background: var(--panel); border-radius: 10px; padding: 15px; text-align: center; border: 1px solid #222; }
+        .kpi-val { font-size: 2rem; font-weight: 900; display: block; }
+        .kpi-label { font-size: 0.65rem; color: #aaa; text-transform: uppercase; margin-top: 4px; }
+        .kpi-critical { border-top: 3px solid #ff0000; }
+        .kpi-medium   { border-top: 3px solid #ffc107; }
+        .kpi-low      { border-top: 3px solid #00cc44; }
+        .kpi-total    { border-top: 3px solid var(--orange); }
+
+        .main-grid { display: grid; grid-template-columns: 340px 1fr; gap: 10px; padding: 0 10px 10px; min-height: 0; }
+        .side-panel { background: var(--panel); border-radius: 12px; border: 1px solid #222; display: flex; flex-direction: column; overflow: hidden; max-height: calc(100vh - 200px); }
+        .panel-header { background: #1c0000; padding: 10px 15px; font-size: 0.75rem; font-weight: bold; color: var(--red); border-bottom: 1px solid #330000; text-transform: uppercase; display: flex; align-items: center; justify-content: space-between; }
+
+        .filter-row { padding: 8px; display: flex; gap: 6px; flex-wrap: wrap; background: #0f0f0f; border-bottom: 1px solid #1a1a1a; }
+        .filter-row select { flex: 1; min-width: 90px; background: #1a1a1a; color: #fff; border: 1px solid #333; border-radius: 6px; font-size: 0.72rem; padding: 4px 6px; }
+
+        .feed-container { flex: 1; overflow-y: auto; padding: 8px; }
+        .incident-card { background: #1e1e1e; border-radius: 8px; padding: 10px 12px; margin-bottom: 8px; cursor: pointer; transition: background 0.15s; }
+        .incident-card:hover { background: #2a2a2a; }
+        .incident-card.critical { border-left: 4px solid #ff0000; }
+        .incident-card.medium   { border-left: 4px solid #ffc107; }
+        .incident-card.low      { border-left: 4px solid #00cc44; }
+
+        .sev-badge { display: inline-block; font-size: 0.6rem; font-weight: bold; padding: 2px 7px; border-radius: 10px; margin-left: 6px; }
+        .sev-critical { background: #ff0000; color: #fff; }
+        .sev-medium   { background: #ffc107; color: #000; }
+        .sev-low      { background: #00cc44; color: #000; }
+
+        #map { height: 380px; border-radius: 12px; background: #111; margin-bottom: 10px; }
+
+        .evidence-panel { background: var(--panel); border-radius: 12px; border: 1px solid #222; padding: 12px; margin-bottom: 10px; min-height: 120px; }
+        .evidence-panel-title { font-size: 0.7rem; color: var(--orange); font-weight: bold; text-transform: uppercase; margin-bottom: 8px; border-bottom: 1px solid #2a2a2a; padding-bottom: 6px; }
+
+        .detail-panel { background: var(--panel); border-radius: 12px; border: 1px solid #222; padding: 14px; }
+        .detail-row { display: flex; justify-content: space-between; padding: 5px 0; border-bottom: 1px solid #1a1a1a; font-size: 0.75rem; }
+        .detail-row:last-child { border-bottom: none; }
+        .detail-label { color: #666; }
+        .detail-val { color: #fff; font-weight: bold; text-align: right; max-width: 60%; }
+
+        @media (max-width: 768px) {
+            .kpi-row { grid-template-columns: repeat(2, 1fr); }
+            .main-grid { grid-template-columns: 1fr; }
+            .side-panel { max-height: 400px; }
+        }
+    </style>
+</head>
+<body>
+
+<nav class="navbar-custom">
+    <div>
+        <div class="brand-title">🚨 ACCORD INCIDENT COMMAND — OSUN 2026</div>
+        <div style="font-size:0.65rem;color:#666;margin-top:2px;">Security & Command Team Dashboard · Auto-refresh every 30s</div>
+    </div>
+    <div style="display:flex;gap:8px;align-items:center;">
+        <span id="last-refresh" style="font-size:0.65rem;color:#555;"></span>
+        <button class="btn btn-sm btn-outline-danger py-1 px-3" style="font-size:11px;" onclick="loadIncidents()">
+            <i class="bi bi-arrow-clockwise"></i> REFRESH
+        </button>
+        <a href="/dashboard" class="btn btn-sm btn-outline-warning py-1 px-3" style="font-size:11px;">
+            📊 Vote Dashboard
+        </a>
+    </div>
+</nav>
+
+<!-- KPI Row -->
+<div class="kpi-row">
+    <div class="kpi-card kpi-total">
+        <span id="kpi-total" class="kpi-val" style="color:var(--orange);">0</span>
+        <div class="kpi-label">Total Incidents</div>
+    </div>
+    <div class="kpi-card kpi-critical">
+        <span id="kpi-critical" class="kpi-val" style="color:#ff4444;">0</span>
+        <div class="kpi-label">🔴 Critical</div>
+    </div>
+    <div class="kpi-card kpi-medium">
+        <span id="kpi-medium" class="kpi-val" style="color:#ffc107;">0</span>
+        <div class="kpi-label">🟡 Medium</div>
+    </div>
+    <div class="kpi-card kpi-low">
+        <span id="kpi-low" class="kpi-val" style="color:#00cc44;">0</span>
+        <div class="kpi-label">🟢 Low</div>
+    </div>
+</div>
+
+<div class="main-grid">
+
+    <!-- Left: Incident Feed -->
+    <div class="side-panel">
+        <div class="panel-header">
+            LIVE INCIDENT FEED
+            <span id="feed-count" class="badge bg-danger ms-1">0</span>
+        </div>
+        <div class="filter-row">
+            <select id="f-severity" onchange="applyFilters()">
+                <option value="">All Severity</option>
+                <option value="Critical">🔴 Critical</option>
+                <option value="Medium">🟡 Medium</option>
+                <option value="Low">🟢 Low</option>
+            </select>
+            <select id="f-type" onchange="applyFilters()">
+                <option value="">All Types</option>
+                <option value="Violence / security threat">Violence</option>
+                <option value="Ballot box snatching">Ballot Snatching</option>
+                <option value="INEC official misconduct">INEC Misconduct</option>
+                <option value="Voter intimidation">Voter Intimidation</option>
+                <option value="Equipment failure (BVAS etc)">Equipment Failure</option>
+                <option value="Other irregularities">Other</option>
+            </select>
+            <select id="f-lga" onchange="applyFilters()">
+                <option value="">All LGAs</option>
+            </select>
+        </div>
+        <div class="feed-container" id="incidentFeed"></div>
+    </div>
+
+    <!-- Right: Map + Detail -->
+    <div>
+        <div id="map"></div>
+
+        <div class="evidence-panel" id="evidencePanel">
+            <div class="evidence-panel-title">📷 Evidence Viewer — Click an incident to view</div>
+            <div id="evidenceContent" style="text-align:center;color:#444;font-size:0.75rem;padding:20px 0;">
+                No incident selected
+            </div>
+        </div>
+
+        <div class="detail-panel" id="detailPanel">
+            <div style="font-size:0.7rem;color:var(--orange);font-weight:bold;text-transform:uppercase;margin-bottom:10px;border-bottom:1px solid #2a2a2a;padding-bottom:6px;">
+                📋 Incident Detail
+            </div>
+            <div id="detailContent" style="color:#555;font-size:0.75rem;">Select an incident from the feed</div>
+        </div>
+    </div>
+</div>
+
+<script>
+    let map, allIncidents = [], markers = [];
+
+    const SEV_COLOR = { Critical: '#ff0000', Medium: '#ffc107', Low: '#00cc44' };
+    const TYPE_ICON = {
+        'Violence / security threat': '⚔️',
+        'Ballot box snatching': '🗳️',
+        'INEC official misconduct': '🏛️',
+        'Voter intimidation': '😰',
+        'Equipment failure (BVAS etc)': '🖥️',
+        'Other irregularities': '⚠️'
+    };
+
+    function initMap() {
+        map = L.map('map', { zoomControl: true }).setView([7.56, 4.52], 9);
+        L.tileLayer('https://{s}.basemaps.cartocdn.com/dark_all/{z}/{x}/{y}{r}.png').addTo(map);
+    }
+
+    async function loadIncidents() {
+        try {
+            const res = await fetch('/api/incidents');
+            allIncidents = await res.json();
+            document.getElementById('last-refresh').textContent = 'Last refresh: ' + new Date().toLocaleTimeString('en-NG');
+            populateLGAFilter();
+            applyFilters();
+        } catch(e) { console.error('Load error', e); }
+    }
+
+    function populateLGAFilter() {
+        const lgas = [...new Set(allIncidents.map(i => i.lg).filter(Boolean))].sort();
+        const sel = document.getElementById('f-lga');
+        const cur = sel.value;
+        sel.innerHTML = '<option value="">All LGAs</option>';
+        lgas.forEach(l => sel.add(new Option(l.toUpperCase(), l)));
+        sel.value = cur;
+    }
+
+    function applyFilters() {
+        const sev = document.getElementById('f-severity').value;
+        const typ = document.getElementById('f-type').value;
+        const lga = document.getElementById('f-lga').value;
+
+        let filtered = allIncidents;
+        if (sev) filtered = filtered.filter(i => i.severity === sev);
+        if (typ) filtered = filtered.filter(i => i.incident_type === typ);
+        if (lga) filtered = filtered.filter(i => i.lg === lga);
+
+        updateKPIs(filtered);
+        renderFeed(filtered);
+        renderMap(filtered);
+    }
+
+    function updateKPIs(data) {
+        document.getElementById('kpi-total').textContent = data.length;
+        document.getElementById('kpi-critical').textContent = data.filter(i => i.severity === 'Critical').length;
+        document.getElementById('kpi-medium').textContent = data.filter(i => i.severity === 'Medium').length;
+        document.getElementById('kpi-low').textContent = data.filter(i => i.severity === 'Low').length;
+        document.getElementById('feed-count').textContent = data.length;
+    }
+
+    function renderFeed(data) {
+        const feed = document.getElementById('incidentFeed');
+        if (!data.length) {
+            feed.innerHTML = '<div style="color:#555;font-size:0.75rem;padding:20px;text-align:center;">No incidents found</div>';
+            return;
+        }
+        feed.innerHTML = data.map((inc, idx) => {
+            const sev = (inc.severity || 'low').toLowerCase();
+            const icon = TYPE_ICON[inc.incident_type] || '⚠️';
+            const ts = inc.timestamp ? new Date(inc.timestamp).toLocaleString('en-NG', {day:'2-digit',month:'short',hour:'2-digit',minute:'2-digit'}) : '--';
+            return `<div class="incident-card ${sev}" onclick="selectIncident(${idx})">
+                <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:4px;">
+                    <span style="font-size:0.8rem;font-weight:bold;">${icon} ${inc.incident_type || 'Unknown'}</span>
+                    <span class="sev-badge sev-${sev}">${inc.severity || ''}</span>
+                </div>
+                <div style="font-size:0.72rem;color:#aaa;">${(inc.location || '').toUpperCase()} · ${(inc.lg || '').toUpperCase()}</div>
+                <div style="font-size:0.68rem;color:#666;margin-top:3px;">👤 ${inc.officer_id || ''} · ${ts}</div>
+                ${inc.description ? `<div style="font-size:0.7rem;color:#ccc;margin-top:5px;border-top:1px solid #2a2a2a;padding-top:5px;">${inc.description.substring(0,80)}${inc.description.length > 80 ? '...' : ''}</div>` : ''}
+            </div>`;
+        }).join('');
+    }
+
+    function renderMap(data) {
+        markers.forEach(m => map.removeLayer(m));
+        markers = [];
+        data.forEach((inc, idx) => {
+            if (!inc.lat || !inc.lon) return;
+            const color = SEV_COLOR[inc.severity] || '#aaa';
+            const m = L.circleMarker([inc.lat, inc.lon], {
+                radius: inc.severity === 'Critical' ? 10 : inc.severity === 'Medium' ? 7 : 5,
+                color: color, fillColor: color, fillOpacity: 0.85, weight: 2
+            }).addTo(map);
+            m.bindPopup(`<b>${inc.incident_type}</b><br>${inc.location}<br><span style="color:${color};font-weight:bold;">${inc.severity}</span>`);
+            m.on('click', () => selectIncident(idx));
+            markers.push(m);
+        });
+    }
+
+    function selectIncident(idx) {
+        const filtered = getFiltered();
+        const inc = filtered[idx];
+        if (!inc) return;
+
+        // Pan map
+        if (inc.lat && inc.lon) map.setView([inc.lat, inc.lon], 14);
+
+        // Evidence
+        const evEl = document.getElementById('evidenceContent');
+        if (inc.evidence_url) {
+            evEl.innerHTML = `<img src="${inc.evidence_url}" style="max-width:100%;max-height:220px;border-radius:8px;border:2px solid var(--orange);cursor:zoom-in;" onclick="window.open('${inc.evidence_url}','_blank')"><div style="font-size:0.65rem;color:#555;margin-top:4px;">Click to open full size</div>`;
+        } else {
+            evEl.innerHTML = '<div style="color:#444;font-size:0.75rem;padding:20px 0;">No evidence uploaded for this incident</div>';
+        }
+
+        // Detail
+        const sev = (inc.severity || '').toLowerCase();
+        const sevColor = SEV_COLOR[inc.severity] || '#aaa';
+        const ts = inc.timestamp ? new Date(inc.timestamp).toLocaleString('en-NG') : '--';
+        document.getElementById('detailContent').innerHTML = `
+            <div class="detail-row"><span class="detail-label">Type</span><span class="detail-val">${TYPE_ICON[inc.incident_type] || ''} ${inc.incident_type || '--'}</span></div>
+            <div class="detail-row"><span class="detail-label">Severity</span><span class="detail-val"><span class="sev-badge sev-${sev}">${inc.severity || '--'}</span></span></div>
+            <div class="detail-row"><span class="detail-label">Officer</span><span class="detail-val">${inc.officer_id || '--'}</span></div>
+            <div class="detail-row"><span class="detail-label">Polling Unit</span><span class="detail-val">${(inc.location || '--').toUpperCase()}</span></div>
+            <div class="detail-row"><span class="detail-label">PU Code</span><span class="detail-val">${inc.pu_code || '--'}</span></div>
+            <div class="detail-row"><span class="detail-label">Ward</span><span class="detail-val">${(inc.ward || '--').toUpperCase()}</span></div>
+            <div class="detail-row"><span class="detail-label">LGA</span><span class="detail-val">${(inc.lg || '--').toUpperCase()}</span></div>
+            <div class="detail-row"><span class="detail-label">GPS</span><span class="detail-val">${inc.lat ? inc.lat.toFixed(4) + ', ' + inc.lon.toFixed(4) : 'Not captured'}</span></div>
+            <div class="detail-row"><span class="detail-label">Reported</span><span class="detail-val">${ts}</span></div>
+            ${inc.description ? `<div style="margin-top:10px;padding:8px;background:#1a1a1a;border-radius:6px;font-size:0.72rem;color:#ccc;border-left:3px solid ${sevColor};">${inc.description}</div>` : ''}
+        `;
+    }
+
+    function getFiltered() {
+        const sev = document.getElementById('f-severity').value;
+        const typ = document.getElementById('f-type').value;
+        const lga = document.getElementById('f-lga').value;
+        let filtered = allIncidents;
+        if (sev) filtered = filtered.filter(i => i.severity === sev);
+        if (typ) filtered = filtered.filter(i => i.incident_type === typ);
+        if (lga) filtered = filtered.filter(i => i.lg === lga);
+        return filtered;
+    }
+
+    document.addEventListener('DOMContentLoaded', () => {
+        initMap();
+        loadIncidents();
+        setInterval(loadIncidents, 30000);
+    });
+</script>
+</body>
+</html>
+"""
+# ─────────────────────────────────────────────────────────────────────────────
+
+
 
 # ── INSIGHT API ENDPOINTS ─────────────────────────────────────────────────────
 
@@ -988,6 +1634,78 @@ async def agent_leaderboard():
         return [dict(r) for r in rows]
     except Exception as e:
         return []
+
+# ─────────────────────────────────────────────────────────────────────────────
+# ── INCIDENT ENDPOINTS ────────────────────────────────────────────────────────
+
+@app.get("/api/incidents")
+async def get_incidents():
+    try:
+        with get_db() as conn:
+            with conn.cursor() as cur:
+                cur.execute("SELECT * FROM incidents ORDER BY timestamp DESC")
+                rows = cur.fetchall()
+                return [dict(r) for r in rows]
+    except Exception as e:
+        return []
+
+@app.post("/submit-incident")
+async def submit_incident(
+    data: str = Form(...),
+    evidence: UploadFile = File(None)
+):
+    try:
+        payload = json.loads(data)
+        evidence_url = None
+
+        if evidence and evidence.filename:
+            safe_pu = str(payload.get("pu_code", "unk")).replace("/", "_").replace(" ", "_")
+            public_id = f"incidents/{safe_pu}_{uuid.uuid4().hex[:8]}"
+            try:
+                img_bytes = await evidence.read()
+                upload_result = cloudinary.uploader.upload(
+                    img_bytes,
+                    public_id=public_id,
+                    resource_type="auto",
+                    overwrite=True
+                )
+                evidence_url = upload_result["secure_url"]
+                logger.info(f"Evidence uploaded to Cloudinary: {evidence_url}")
+            except Exception as cloud_err:
+                logger.error(f"Cloudinary upload failed for incident: {cloud_err}")
+
+        with get_db() as conn:
+            with conn.cursor() as cur:
+                cur.execute("""INSERT INTO incidents (
+                    officer_id, pu_code, ward, ward_code, lg, state, location,
+                    incident_type, severity, description, evidence_url,
+                    lat, lon, timestamp, status
+                ) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)""", (
+                    payload.get("officer_id"),
+                    payload.get("pu_code"),
+                    payload.get("ward"),
+                    payload.get("ward_code"),
+                    payload.get("lg"),
+                    payload.get("state"),
+                    payload.get("location"),
+                    payload.get("incident_type"),
+                    payload.get("severity"),
+                    payload.get("description"),
+                    evidence_url,
+                    payload.get("lat"),
+                    payload.get("lon"),
+                    datetime.now().isoformat(),
+                    "open"
+                ))
+            conn.commit()
+
+        alert_payload = {**payload, "timestamp": datetime.now().strftime("%d %b %Y %H:%M")}
+        threading.Thread(target=send_incident_alert, args=(alert_payload,)).start()
+
+        return {"status": "success", "message": "Incident reported successfully"}
+    except Exception as e:
+        logger.error(f"Incident submission error: {e}", exc_info=True)
+        return {"status": "error", "message": str(e)}
 
 # ─────────────────────────────────────────────────────────────────────────────
 @app.get("/dashboard", response_class=HTMLResponse)
