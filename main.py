@@ -389,6 +389,33 @@ def init_db():
         except Exception:
             pass  # Column already exists — fine
 
+        # Safe migration: add review/edit columns to field_submissions
+        for _col in [
+            "reviewed INTEGER DEFAULT 0",
+            "reviewed_by TEXT",
+            "reviewed_at TEXT",
+            "edited_votes_json TEXT",   # overridden vote data (if edited)
+            "edit_note TEXT",
+        ]:
+            try:
+                cur.execute(f"ALTER TABLE field_submissions ADD COLUMN {_col}")
+            except Exception:
+                pass
+
+        # Audit log table — records every edit made in the results portal
+        cur.execute("""
+            CREATE TABLE IF NOT EXISTS result_audit_log (
+                id          INTEGER PRIMARY KEY AUTOINCREMENT,
+                submission_id INTEGER,
+                action      TEXT,        -- 'edit' | 'approve' | 'unapprove'
+                field       TEXT,        -- field that changed (or 'bulk')
+                old_value   TEXT,
+                new_value   TEXT,
+                changed_by  TEXT,        -- 'admin' for now
+                changed_at  TEXT
+            )
+        """)
+
         # Safe migration: add officer_phone to polling_units if missing
         try:
             cur.execute("ALTER TABLE polling_units ADD COLUMN officer_phone TEXT")
@@ -1090,13 +1117,19 @@ async def set_officer_phone(request: Request):
 @app.get("/submissions")
 async def get_dashboard_data(request: Request):
     _require_dashboard(request)
+    require_review = os.environ.get("REQUIRE_REVIEW", "0").lower() in ("1", "true", "yes")
+    where = "WHERE LOWER(state) = 'osun'"
+    if require_review:
+        where += " AND reviewed = 1"
     with get_db() as conn:
         with conn.cursor() as cur:
-            cur.execute("SELECT * FROM field_submissions WHERE LOWER(state) = 'osun' ORDER BY timestamp DESC")
+            cur.execute(f"SELECT * FROM field_submissions {where} ORDER BY timestamp DESC")
             rows = cur.fetchall()
             data = []
             for r in rows:
-                v = json.loads(r['votes_json']) if isinstance(r['votes_json'], str) else r['votes_json']
+                # Use edited votes if admin has overridden them
+                votes_src = r.get('edited_votes_json') or r.get('votes_json')
+                v = json.loads(votes_src) if isinstance(votes_src, str) else (votes_src or {})
                 raw = r.get('ec8e_image')
                 if raw:
                     ec8e_url = raw if raw.startswith('http') else f"/ec8e/{raw}"
@@ -1111,7 +1144,8 @@ async def get_dashboard_data(request: Request):
                     "total_cast": r.get('total_cast') or 0,
                     "officer_id": r.get('officer_id') or '',
                     "timestamp": str(r.get('timestamp') or ''),
-                    "pu_code": r.get('pu_code') or ''
+                    "pu_code": r.get('pu_code') or '',
+                    "reviewed": bool(r.get('reviewed')),
                 }
                 for p in ["ACCORD","AA","AAC","ADC","ADP","APGA","APC","APM","APP","BP","NNPP","PRP","YPP","ZLP"]:
                     entry[f"votes_party_{p}"] = v.get(p, 0)
@@ -1136,6 +1170,411 @@ async def serve_ec8e(filename: str):
         "Access-Control-Allow-Origin": "*"
     })
 
+
+
+RESULTS_PORTAL_HTML = """
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>ACCORD — Results Review Portal</title>
+<link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;600;700;900&display=swap" rel="stylesheet">
+<style>
+*,*::before,*::after{box-sizing:border-box;margin:0;padding:0}
+:root{--green:#008751;--green-light:#00b368;--gold:#ffc107;--dark:#020c06;--panel:rgba(255,255,255,0.04);--border:rgba(255,255,255,0.1)}
+body{font-family:'Inter',sans-serif;background:var(--dark);color:#fff;min-height:100vh}
+body::before{content:'';position:fixed;inset:0;z-index:0;background:radial-gradient(ellipse 120% 80% at 50% -10%,rgba(0,135,81,0.15) 0%,transparent 60%),linear-gradient(160deg,#020c06 0%,#041508 40%,#020c06 100%)}
+.page{position:relative;z-index:1;max-width:1100px;margin:0 auto;padding:28px 20px 60px}
+#loginGate{min-height:100vh;display:flex;align-items:center;justify-content:center}
+.login-card{background:var(--panel);border:1px solid rgba(0,135,81,0.25);border-radius:20px;padding:48px 40px;width:100%;max-width:400px;text-align:center}
+.lock-icon{width:60px;height:60px;border-radius:50%;background:rgba(0,135,81,0.15);border:2px solid rgba(0,135,81,0.3);display:flex;align-items:center;justify-content:center;font-size:1.6rem;margin:0 auto 20px}
+h1{font-size:1.5rem;font-weight:800;margin-bottom:6px}
+.sub{color:rgba(255,255,255,0.4);font-size:0.82rem;margin-bottom:28px}
+.form-control{width:100%;background:rgba(255,255,255,0.06);border:1px solid rgba(255,255,255,0.12);border-radius:10px;color:#fff;padding:12px 16px;font-size:0.9rem;outline:none;margin-bottom:12px}
+.form-control:focus{border-color:var(--green)}
+.btn-primary{width:100%;background:linear-gradient(135deg,var(--green),var(--green-light));border:none;border-radius:10px;color:#fff;font-weight:700;font-size:0.9rem;padding:13px;cursor:pointer;margin-top:4px}
+.btn-primary:hover{opacity:0.9}
+.err-msg{color:#ff6b6b;font-size:0.78rem;margin-top:8px;display:none}
+/* Portal layout */
+#portal{display:none}
+.portal-header{display:flex;justify-content:space-between;align-items:flex-start;margin-bottom:24px;flex-wrap:wrap;gap:16px}
+.badge-tag{font-size:0.62rem;font-weight:700;letter-spacing:0.15em;color:var(--gold);background:rgba(255,193,7,0.1);border:1px solid rgba(255,193,7,0.2);border-radius:20px;padding:3px 12px;display:inline-block;margin-bottom:8px;text-transform:uppercase}
+.portal-header h1{font-size:1.6rem;font-weight:900;margin-bottom:4px}
+.portal-header p{color:rgba(255,255,255,0.45);font-size:0.8rem}
+.btn-secondary{background:rgba(255,255,255,0.06);border:1px solid rgba(255,255,255,0.12);border-radius:8px;color:rgba(255,255,255,0.7);font-size:0.78rem;font-weight:600;padding:8px 16px;cursor:pointer}
+.btn-secondary:hover{background:rgba(255,255,255,0.1)}
+/* Filters */
+.filters{display:flex;gap:10px;flex-wrap:wrap;margin-bottom:18px;align-items:center}
+.filter-select{background:rgba(255,255,255,0.06);border:1px solid rgba(255,255,255,0.12);border-radius:8px;color:#fff;padding:7px 12px;font-size:0.78rem;outline:none;cursor:pointer}
+.filter-select option{background:#041508}
+.search-input{background:rgba(255,255,255,0.06);border:1px solid rgba(255,255,255,0.12);border-radius:8px;color:#fff;padding:7px 14px;font-size:0.78rem;outline:none;width:220px}
+.search-input:focus{border-color:var(--green)}
+/* Stats pills */
+.stats-row{display:flex;gap:12px;flex-wrap:wrap;margin-bottom:22px}
+.stat-pill{background:var(--panel);border:1px solid var(--border);border-radius:12px;padding:12px 18px;display:flex;flex-direction:column;align-items:center;min-width:110px}
+.stat-pill .val{font-size:1.4rem;font-weight:800;line-height:1}
+.stat-pill .lbl{font-size:0.65rem;color:rgba(255,255,255,0.4);margin-top:4px;text-transform:uppercase;letter-spacing:0.06em}
+.val-green{color:#00cc66}.val-gold{color:#ffc107}.val-red{color:#ff6b6b}.val-blue{color:#4fc3f7}
+/* Table */
+.tbl-wrap{overflow-x:auto;border-radius:12px;border:1px solid var(--border)}
+table{width:100%;border-collapse:collapse;font-size:0.78rem}
+thead th{background:rgba(255,255,255,0.04);padding:10px 10px;text-align:left;font-size:0.65rem;color:rgba(255,255,255,0.4);text-transform:uppercase;letter-spacing:0.08em;white-space:nowrap;border-bottom:1px solid rgba(255,255,255,0.08)}
+tbody tr{border-bottom:1px solid rgba(255,255,255,0.05);transition:background 0.1s}
+tbody tr:hover{background:rgba(255,255,255,0.03)}
+td{padding:9px 10px;vertical-align:middle}
+.badge{display:inline-block;padding:2px 8px;border-radius:20px;font-size:0.62rem;font-weight:700;letter-spacing:0.05em}
+.badge-ok{background:rgba(0,204,102,0.15);color:#00cc66;border:1px solid rgba(0,204,102,0.3)}
+.badge-pending{background:rgba(255,193,7,0.12);color:#ffc107;border:1px solid rgba(255,193,7,0.25)}
+.badge-edited{background:rgba(79,195,247,0.12);color:#4fc3f7;border:1px solid rgba(79,195,247,0.25)}
+/* Action buttons */
+.btn-a{background:rgba(255,255,255,0.06);border:1px solid rgba(255,255,255,0.12);border-radius:6px;color:#fff;cursor:pointer;font-size:0.68rem;padding:3px 8px;margin-right:3px;white-space:nowrap}
+.btn-a:hover{background:rgba(255,255,255,0.12)}
+.btn-approve{border-color:rgba(0,204,102,0.4);color:#00cc66}
+.btn-unapprove{border-color:rgba(255,193,7,0.4);color:#ffc107}
+.btn-edit-r{border-color:rgba(79,195,247,0.4);color:#4fc3f7}
+/* Edit modal */
+.modal-overlay{position:fixed;inset:0;background:rgba(0,0,0,0.75);z-index:1000;display:flex;align-items:center;justify-content:center;padding:20px}
+.modal{background:#041508;border:1px solid rgba(0,135,81,0.3);border-radius:16px;width:100%;max-width:560px;padding:28px;max-height:90vh;overflow-y:auto}
+.modal h2{font-size:1.1rem;font-weight:800;margin-bottom:4px}
+.modal .sub{margin-bottom:20px}
+.field-row{display:grid;grid-template-columns:1fr 1fr;gap:10px;margin-bottom:12px}
+.field-group label{font-size:0.68rem;color:rgba(255,255,255,0.4);display:block;margin-bottom:4px;text-transform:uppercase;letter-spacing:0.06em}
+.field-group input{width:100%;background:rgba(255,255,255,0.06);border:1px solid rgba(255,255,255,0.15);border-radius:8px;color:#fff;padding:8px 10px;font-size:0.82rem;outline:none}
+.field-group input:focus{border-color:var(--green)}
+.parties-grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(100px,1fr));gap:8px;margin-bottom:16px}
+.modal-actions{display:flex;gap:10px;justify-content:flex-end;margin-top:16px}
+.btn-save-modal{background:linear-gradient(135deg,var(--green),var(--green-light));border:none;border-radius:8px;color:#fff;font-weight:700;font-size:0.82rem;padding:10px 22px;cursor:pointer}
+.btn-cancel-modal{background:rgba(255,255,255,0.06);border:1px solid rgba(255,255,255,0.15);border-radius:8px;color:rgba(255,255,255,0.7);font-size:0.82rem;padding:10px 18px;cursor:pointer}
+.note-input{width:100%;background:rgba(255,255,255,0.06);border:1px solid rgba(255,255,255,0.15);border-radius:8px;color:#fff;padding:8px 10px;font-size:0.8rem;resize:vertical;min-height:60px;margin-bottom:12px;outline:none}
+/* Pagination */
+.pagination{display:flex;gap:8px;align-items:center;justify-content:flex-end;margin-top:14px;font-size:0.78rem;color:rgba(255,255,255,0.4)}
+.page-btn{background:rgba(255,255,255,0.06);border:1px solid rgba(255,255,255,0.12);border-radius:6px;color:#fff;cursor:pointer;padding:4px 10px;font-size:0.75rem}
+.page-btn:disabled{opacity:0.3;cursor:default}
+/* Pending badge on dashboard link */
+.pending-badge{display:inline-block;background:#ff6b6b;color:#fff;border-radius:20px;font-size:0.6rem;font-weight:800;padding:1px 6px;margin-left:6px;vertical-align:middle}
+</style>
+</head>
+<body>
+
+<!-- Login gate -->
+<div id="loginGate">
+  <div class="login-card">
+    <div class="lock-icon">🔐</div>
+    <h1>Results Portal</h1>
+    <p class="sub">ACCORD Field Collation — Review & Approve</p>
+    <input type="password" id="rKey" class="form-control" placeholder="Admin key" onkeydown="if(event.key==='Enter')rLogin()">
+    <button class="btn-primary" id="rLoginBtn" onclick="rLogin()">Access Results Portal →</button>
+    <div class="err-msg" id="rLoginErr">Incorrect key. Try again.</div>
+  </div>
+</div>
+
+<!-- Portal -->
+<div id="portal" class="page">
+  <div class="portal-header">
+    <div>
+      <div class="badge-tag">Admin — Results Review Portal</div>
+      <h1>📊 Submitted Results</h1>
+      <p>Review, edit and approve PU submissions before they appear on the dashboard.</p>
+    </div>
+    <div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap;">
+      <a href="/admin" target="_blank" class="btn-secondary">⚙️ Officer Admin</a>
+      <button class="btn-secondary" onclick="rLogout()">🔒 Lock</button>
+    </div>
+  </div>
+
+  <!-- Stats -->
+  <div class="stats-row">
+    <div class="stat-pill"><span class="val val-gold" id="rStatTotal">—</span><span class="lbl">Total</span></div>
+    <div class="stat-pill"><span class="val val-green" id="rStatApproved">—</span><span class="lbl">Approved</span></div>
+    <div class="stat-pill"><span class="val val-red" id="rStatPending">—</span><span class="lbl">Pending</span></div>
+    <div class="stat-pill"><span class="val val-blue" id="rStatEdited">—</span><span class="lbl">Edited</span></div>
+  </div>
+
+  <!-- Filters -->
+  <div class="filters">
+    <select class="filter-select" id="rFilterLga" onchange="loadResults(1)">
+      <option value="">All LGAs</option>
+    </select>
+    <select class="filter-select" id="rFilterStatus" onchange="loadResults(1)">
+      <option value="">All Status</option>
+      <option value="pending">Pending Review</option>
+      <option value="reviewed">Approved</option>
+    </select>
+    <input type="text" class="search-input" id="rSearch" placeholder="Search PU, ward, officer..." oninput="filterTable(this.value)">
+    <button class="btn-secondary" onclick="approveAllVisible()" style="margin-left:auto;">✅ Approve All Visible</button>
+  </div>
+
+  <!-- Table -->
+  <div class="tbl-wrap">
+    <table>
+      <thead>
+        <tr>
+          <th>#</th>
+          <th>PU Code</th>
+          <th>Location</th>
+          <th>LGA</th>
+          <th>Ward</th>
+          <th>Officer</th>
+          <th>ACCORD</th>
+          <th>Total Cast</th>
+          <th>Accredited</th>
+          <th>Timestamp</th>
+          <th>Status</th>
+          <th>Actions</th>
+        </tr>
+      </thead>
+      <tbody id="rTableBody">
+        <tr><td colspan="12" style="text-align:center;padding:30px;color:rgba(255,255,255,0.3);">Login to view results.</td></tr>
+      </tbody>
+    </table>
+  </div>
+  <div class="pagination">
+    <span id="rPageInfo"></span>
+    <button class="page-btn" id="rPrevBtn" onclick="loadResults(_rPage-1)" disabled>◀ Prev</button>
+    <button class="page-btn" id="rNextBtn" onclick="loadResults(_rPage+1)" disabled>Next ▶</button>
+  </div>
+</div>
+
+<!-- Edit Modal -->
+<div class="modal-overlay" id="editModal" style="display:none;" onclick="if(event.target===this)closeModal()">
+  <div class="modal">
+    <h2>✏️ Edit Submission</h2>
+    <p class="sub" id="modalSub"></p>
+    <input type="hidden" id="modalId">
+    <div class="field-row">
+      <div class="field-group"><label>Total Accredited</label><input type="number" id="mAccredited" min="0"></div>
+      <div class="field-group"><label>Total Cast</label><input type="number" id="mCast" min="0"></div>
+      <div class="field-group"><label>Valid Votes</label><input type="number" id="mValid" min="0"></div>
+      <div class="field-group"><label>Rejected Votes</label><input type="number" id="mRejected" min="0"></div>
+    </div>
+    <div style="font-size:0.68rem;color:rgba(255,255,255,0.4);text-transform:uppercase;letter-spacing:0.08em;margin-bottom:8px;">Party Votes</div>
+    <div class="parties-grid" id="modalParties"></div>
+    <div style="font-size:0.68rem;color:rgba(255,255,255,0.4);text-transform:uppercase;letter-spacing:0.08em;margin-bottom:6px;">Edit Note</div>
+    <textarea class="note-input" id="mNote" placeholder="Reason for edit (optional)..."></textarea>
+    <div class="modal-actions">
+      <button class="btn-cancel-modal" onclick="closeModal()">Cancel</button>
+      <button class="btn-save-modal" onclick="saveEdit()">💾 Save Changes</button>
+    </div>
+  </div>
+</div>
+
+<script>
+const PARTIES = ["ACCORD","AA","AAC","ADC","ADP","APGA","APC","APM","APP","BP","NNPP","PRP","YPP","ZLP"];
+let _rKey = '', _rPage = 1, _rData = [], _rTotal = 0, _rPages = 1;
+
+async function rLogin() {
+    const key = document.getElementById('rKey').value.trim();
+    if (!key) return;
+    const btn = document.getElementById('rLoginBtn');
+    const err = document.getElementById('rLoginErr');
+    btn.disabled = true; btn.textContent = 'Verifying...';
+    err.style.display = 'none';
+    try {
+        const res = await fetch('/api/admin/officer-stats', {
+            headers: { 'Authorization': 'Bearer ' + key }
+        });
+        if (!res.ok) {
+            err.style.display = 'block';
+            btn.disabled = false; btn.textContent = 'Access Results Portal →';
+            return;
+        }
+        _rKey = key;
+        document.getElementById('loginGate').style.display = 'none';
+        document.getElementById('portal').style.display = 'block';
+        loadResults(1);
+        loadLgas();
+        loadSummaryStats();
+    } catch(e) {
+        err.textContent = 'Server error.';
+        err.style.display = 'block';
+        btn.disabled = false; btn.textContent = 'Access Results Portal →';
+    }
+}
+
+function rLogout() {
+    _rKey = '';
+    document.getElementById('portal').style.display = 'none';
+    document.getElementById('loginGate').style.display = 'flex';
+    document.getElementById('rKey').value = '';
+}
+
+async function loadSummaryStats() {
+    try {
+        const res = await fetch('/api/admin/pending-review-count', { credentials: 'include' });
+        if (!res.ok) return;
+        const d = await res.json();
+        document.getElementById('rStatTotal').textContent   = d.total.toLocaleString();
+        document.getElementById('rStatPending').textContent = d.pending.toLocaleString();
+        document.getElementById('rStatApproved').textContent = (d.total - d.pending).toLocaleString();
+    } catch(e) {}
+}
+
+async function loadLgas() {
+    try {
+        const res = await fetch('/api/lgas/osun', { credentials: 'include' });
+        const d = await res.json();
+        const sel = document.getElementById('rFilterLga');
+        (d.lgas || d).forEach(l => {
+            const o = document.createElement('option');
+            o.value = typeof l === 'string' ? l : l.lg;
+            o.textContent = typeof l === 'string' ? l : l.lg;
+            sel.appendChild(o);
+        });
+    } catch(e) {}
+}
+
+async function loadResults(page) {
+    _rPage = page || 1;
+    const lga    = document.getElementById('rFilterLga').value;
+    const status = document.getElementById('rFilterStatus').value;
+    const tbody  = document.getElementById('rTableBody');
+    tbody.innerHTML = '<tr><td colspan="12" style="text-align:center;padding:24px;color:rgba(255,255,255,0.3);">Loading...</td></tr>';
+    try {
+        const res = await fetch(`/api/admin/results?page=${_rPage}&lga=${encodeURIComponent(lga)}&status=${status}`, {
+            headers: { 'Authorization': 'Bearer ' + _rKey }
+        });
+        const d = await res.json();
+        _rData   = d.results || [];
+        _rTotal  = d.total || 0;
+        _rPages  = d.pages || 1;
+        renderTable(_rData);
+        document.getElementById('rPageInfo').textContent = `Page ${_rPage} of ${_rPages} · ${_rTotal.toLocaleString()} results`;
+        document.getElementById('rPrevBtn').disabled = _rPage <= 1;
+        document.getElementById('rNextBtn').disabled = _rPage >= _rPages;
+        // Count edited
+        const editedCount = _rData.filter(r => r.edit_note || false).length;
+        document.getElementById('rStatEdited').textContent = editedCount;
+        loadSummaryStats();
+    } catch(e) {
+        tbody.innerHTML = '<tr><td colspan="12" style="color:#ff6b6b;text-align:center;padding:20px;">Failed to load results.</td></tr>';
+    }
+}
+
+function renderTable(data) {
+    const tbody = document.getElementById('rTableBody');
+    if (!data.length) {
+        tbody.innerHTML = '<tr><td colspan="12" style="text-align:center;padding:30px;color:rgba(255,255,255,0.3);">No results found.</td></tr>';
+        return;
+    }
+    const offset = (_rPage - 1) * 50;
+    tbody.innerHTML = data.map((r, i) => {
+        const statusBadge = r.reviewed
+            ? '<span class="badge badge-ok">✅ Approved</span>'
+            : '<span class="badge badge-pending">⏳ Pending</span>';
+        const editedBadge = r.edit_note ? ' <span class="badge badge-edited">✏️ Edited</span>' : '';
+        const accord = r.votes ? (r.votes.ACCORD || 0) : 0;
+        const ts = r.timestamp ? r.timestamp.substring(0,16).replace('T',' ') : '—';
+        return `<tr id="rrow-${r.id}">
+            <td style="color:rgba(255,255,255,0.3);">${offset + i + 1}</td>
+            <td style="font-weight:700;color:#ffc107;white-space:nowrap;">${r.pu_code || '—'}</td>
+            <td style="max-width:140px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;" title="${r.location||''}">${r.location || '—'}</td>
+            <td style="font-size:0.72rem;color:rgba(255,255,255,0.6);">${r.lg || '—'}</td>
+            <td style="font-size:0.7rem;color:rgba(255,255,255,0.5);">${r.ward || '—'}</td>
+            <td style="font-size:0.72rem;">${r.officer_id || '—'}</td>
+            <td style="font-weight:700;color:#00cc66;">${accord.toLocaleString()}</td>
+            <td>${(r.total_cast||0).toLocaleString()}</td>
+            <td>${(r.total_accredited||0).toLocaleString()}</td>
+            <td style="font-size:0.68rem;color:rgba(255,255,255,0.4);white-space:nowrap;">${ts}</td>
+            <td>${statusBadge}${editedBadge}</td>
+            <td style="white-space:nowrap;">
+                <button class="btn-a btn-edit-r" onclick="openEditModal(${r.id})">✏️ Edit</button>
+                ${r.reviewed
+                    ? `<button class="btn-a btn-unapprove" onclick="toggleApprove(${r.id}, false)">↩ Undo</button>`
+                    : `<button class="btn-a btn-approve"   onclick="toggleApprove(${r.id}, true)">✅ Approve</button>`}
+            </td>
+        </tr>`;
+    }).join('');
+}
+
+function filterTable(q) {
+    if (!q) { renderTable(_rData); return; }
+    const lq = q.toLowerCase();
+    renderTable(_rData.filter(r =>
+        (r.pu_code||'').toLowerCase().includes(lq) ||
+        (r.location||'').toLowerCase().includes(lq) ||
+        (r.ward||'').toLowerCase().includes(lq) ||
+        (r.officer_id||'').toLowerCase().includes(lq)
+    ));
+}
+
+async function toggleApprove(id, approve) {
+    try {
+        const res = await fetch(`/api/admin/results/${id}/approve`, {
+            method: 'POST',
+            headers: { 'Authorization': 'Bearer ' + _rKey, 'Content-Type': 'application/json' },
+            body: JSON.stringify({ approve })
+        });
+        if (!res.ok) { alert('Failed to update approval'); return; }
+        loadResults(_rPage);
+    } catch(e) { alert('Server error'); }
+}
+
+async function approveAllVisible() {
+    const pending = _rData.filter(r => !r.reviewed);
+    if (!pending.length) { alert('No pending results on this page.'); return; }
+    if (!confirm(`Approve all ${pending.length} pending results on this page?`)) return;
+    for (const r of pending) {
+        await fetch(`/api/admin/results/${r.id}/approve`, {
+            method: 'POST',
+            headers: { 'Authorization': 'Bearer ' + _rKey, 'Content-Type': 'application/json' },
+            body: JSON.stringify({ approve: true })
+        });
+    }
+    loadResults(_rPage);
+}
+
+function openEditModal(id) {
+    const r = _rData.find(x => x.id === id);
+    if (!r) return;
+    document.getElementById('modalId').value = id;
+    document.getElementById('modalSub').textContent = `${r.pu_code} · ${r.location} · ${r.lg}`;
+    document.getElementById('mAccredited').value = r.total_accredited || 0;
+    document.getElementById('mCast').value       = r.total_cast || 0;
+    document.getElementById('mValid').value      = r.valid_votes || 0;
+    document.getElementById('mRejected').value   = r.rejected_votes || 0;
+    document.getElementById('mNote').value       = r.edit_note || '';
+    const grid = document.getElementById('modalParties');
+    grid.innerHTML = PARTIES.map(p => `
+        <div class="field-group">
+            <label>${p}</label>
+            <input type="number" id="mp-${p}" min="0" value="${(r.votes && r.votes[p]) || 0}">
+        </div>`).join('');
+    document.getElementById('editModal').style.display = 'flex';
+}
+
+function closeModal() {
+    document.getElementById('editModal').style.display = 'none';
+}
+
+async function saveEdit() {
+    const id   = parseInt(document.getElementById('modalId').value);
+    const body = {
+        total_accredited: parseInt(document.getElementById('mAccredited').value) || 0,
+        total_cast:       parseInt(document.getElementById('mCast').value)       || 0,
+        valid_votes:      parseInt(document.getElementById('mValid').value)      || 0,
+        rejected_votes:   parseInt(document.getElementById('mRejected').value)   || 0,
+        edit_note:        document.getElementById('mNote').value.trim(),
+        votes: {}
+    };
+    PARTIES.forEach(p => {
+        body.votes[p] = parseInt(document.getElementById(`mp-${p}`).value) || 0;
+    });
+    try {
+        const res = await fetch(`/api/admin/results/${id}`, {
+            method: 'PUT',
+            headers: { 'Authorization': 'Bearer ' + _rKey, 'Content-Type': 'application/json' },
+            body: JSON.stringify(body)
+        });
+        if (!res.ok) { const e = await res.json(); alert(e.detail || 'Save failed'); return; }
+        closeModal();
+        loadResults(_rPage);
+    } catch(e) { alert('Server error'); }
+}
+</script>
+</body>
+</html>
+"""
 
 ADMIN_HTML = """
 <!DOCTYPE html>
@@ -1276,6 +1715,13 @@ ADMIN_HTML = """
              font-size: 0.65rem; letter-spacing: 0.08em; text-transform: uppercase; }
         tbody tr { border-bottom: 1px solid rgba(255,255,255,0.05); }
         tbody tr:hover { background: rgba(255,255,255,0.03); }
+        .btn-action { background: rgba(255,255,255,0.06); border: 1px solid rgba(255,255,255,0.12); border-radius: 6px; color: #fff; cursor: pointer; font-size: 0.7rem; padding: 3px 8px; margin-right: 4px; transition: background 0.15s; }
+        .btn-action:hover { background: rgba(255,255,255,0.12); }
+        .btn-action:disabled { opacity: 0.4; cursor: default; }
+        .btn-edit { border-color: rgba(0,179,104,0.4); color: #00cc66; }
+        .btn-del  { border-color: rgba(255,107,107,0.4); color: #ff6b6b; }
+        .btn-save { border-color: rgba(0,179,104,0.6); color: #00cc66; background: rgba(0,135,81,0.15); }
+        .btn-cancel { border-color: rgba(255,193,7,0.4); color: #ffc107; }
         td { padding: 7px 12px; color: rgba(255,255,255,0.75); }
         td.valid { color: #00cc66; }
         td.invalid { color: #ff6b6b; }
@@ -1346,6 +1792,7 @@ ADMIN_HTML = """
                 <p>Upload a CSV or paste officer IDs and phone numbers to register them for WhatsApp OTP authentication.</p>
             </div>
             <div style="display:flex;gap:8px;flex-wrap:wrap;align-items:center;">
+                <a href="/admin/results" target="_blank" class="btn-gold" style="background:rgba(0,179,104,0.15);border-color:rgba(0,179,104,0.4);">📊 Results Portal</a>
                 <a id="templateDownloadBtn" href="#" onclick="downloadTemplate(event)" class="btn-gold">⬇ Download CSV Template</a>
                 <button class="btn-secondary" onclick="adminLogout()">🔒 Lock</button>
             </div>
@@ -1401,6 +1848,34 @@ ADMIN_HTML = """
     </div>
 
 </div>
+
+    <!-- ── Registered Officers Table ── -->
+    <div class="card" id="officerTableCard" style="margin-top:24px;">
+        <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:14px;flex-wrap:wrap;gap:10px;">
+            <span class="card-title" style="margin-bottom:0;">📋 Registered Officers</span>
+            <input type="text" id="officerSearch" placeholder="Search officer ID, LGA, phone..." onkeyup="loadOfficerTable(1, this.value)"
+                   style="background:rgba(255,255,255,0.06);border:1px solid rgba(255,255,255,0.12);border-radius:8px;color:#fff;padding:6px 12px;font-size:0.78rem;width:260px;">
+        </div>
+        <div class="preview-wrap" style="max-height:420px;overflow-y:auto;">
+            <table style="width:100%;border-collapse:collapse;">
+                <thead>
+                    <tr style="font-size:0.7rem;color:rgba(255,255,255,0.4);text-transform:uppercase;letter-spacing:0.08em;border-bottom:1px solid rgba(255,255,255,0.08);">
+                        <th style="padding:8px 6px;text-align:left;">Officer ID</th>
+                        <th style="padding:8px 6px;text-align:left;">LGA</th>
+                        <th style="padding:8px 6px;text-align:left;">Ward</th>
+                        <th style="padding:8px 6px;text-align:left;">Polling Unit</th>
+                        <th style="padding:8px 6px;text-align:left;">Phone</th>
+                        <th style="padding:8px 6px;text-align:left;">Actions</th>
+                    </tr>
+                </thead>
+                <tbody id="officerTableBody">
+                    <tr><td colspan="6" style="text-align:center;padding:20px;color:rgba(255,255,255,0.3);">Login to view registered officers.</td></tr>
+                </tbody>
+            </table>
+        </div>
+        <div id="officerTableInfo" style="margin-top:10px;font-size:0.72rem;color:rgba(255,255,255,0.4);"></div>
+    </div>
+
 </div>
 
 <script>
@@ -1664,12 +2139,381 @@ ADMIN_HTML = """
     document.addEventListener('DOMContentLoaded', () => {
         document.getElementById('adminKey').focus();
     });
+
+    // ── Registered Officers Table ────────────────────────────────────────────
+    let _officerPage = 1, _officerQ = '';
+
+    async function loadOfficerTable(page, q) {
+        _officerPage = page || 1;
+        _officerQ    = (q !== undefined) ? q : _officerQ;
+        const tbl  = document.getElementById('officerTableBody');
+        const info = document.getElementById('officerTableInfo');
+        if (!tbl) return;
+        tbl.innerHTML = '<tr><td colspan="6" style="text-align:center;padding:20px;color:rgba(255,255,255,0.3);">Loading...</td></tr>';
+        try {
+            const res = await fetch(`/api/admin/list-officers?page=${_officerPage}&q=${encodeURIComponent(_officerQ)}`, {
+                headers: { 'Authorization': 'Bearer ' + _adminKey }
+            });
+            const d = await res.json();
+            if (!d.officers || !d.officers.length) {
+                tbl.innerHTML = '<tr><td colspan="6" style="text-align:center;padding:20px;color:rgba(255,255,255,0.3);">No registered officers found.</td></tr>';
+                if (info) info.textContent = '';
+                return;
+            }
+            tbl.innerHTML = d.officers.map(o => `
+                <tr id="orow-${o.ward_code}-${o.pu_code}">
+                    <td style="font-weight:700;color:#ffc107;">${o.ward_code}-${o.pu_code}</td>
+                    <td style="font-size:0.75rem;color:rgba(255,255,255,0.6);">${o.lg || '—'}</td>
+                    <td style="font-size:0.72rem;color:rgba(255,255,255,0.5);">${o.ward || '—'}</td>
+                    <td style="font-size:0.7rem;color:rgba(255,255,255,0.4);max-width:140px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;" title="${o.location||''}">${o.location || '—'}</td>
+                    <td id="phone-${o.ward_code}-${o.pu_code}" style="color:#00cc66;font-weight:600;">${o.officer_phone || '—'}</td>
+                    <td style="white-space:nowrap;">
+                        <button class="btn-action btn-edit" onclick="editOfficerRow('${o.ward_code}','${o.pu_code}','${o.officer_phone||''}')">✏️ Edit</button>
+                        <button class="btn-action btn-del" onclick="deleteOfficer('${o.ward_code}','${o.pu_code}')">🗑 Delete</button>
+                    </td>
+                </tr>`).join('');
+            if (info) info.innerHTML =
+                `Showing page ${d.page} of ${d.pages} &nbsp;·&nbsp; ${d.total.toLocaleString()} registered` +
+                (d.pages > 1 ? ` &nbsp; <button class="btn-action" onclick="loadOfficerTable(${_officerPage-1})" ${_officerPage<=1?'disabled':''}>◀</button>` +
+                               ` <button class="btn-action" onclick="loadOfficerTable(${_officerPage+1})" ${_officerPage>=d.pages?'disabled':''}>▶</button>` : '');
+        } catch(e) {
+            tbl.innerHTML = '<tr><td colspan="6" style="color:#ff6b6b;text-align:center;padding:16px;">Failed to load officers.</td></tr>';
+        }
+    }
+
+    function editOfficerRow(wardCode, puCode, currentPhone) {
+        const phoneCell = document.getElementById(`phone-${wardCode}-${puCode}`);
+        const row = document.getElementById(`orow-${wardCode}-${puCode}`);
+        const actionCell = row.querySelector('td:last-child');
+        phoneCell.innerHTML = `<input type="text" id="edit-phone-${wardCode}-${puCode}" value="${currentPhone}" style="background:rgba(255,255,255,0.08);border:1px solid rgba(0,135,81,0.5);border-radius:6px;color:#fff;padding:4px 8px;width:160px;font-size:0.8rem;">`;
+        actionCell.innerHTML = `
+            <button class="btn-action btn-save" onclick="saveOfficerEdit('${wardCode}','${puCode}')">💾 Save</button>
+            <button class="btn-action btn-cancel" onclick="loadOfficerTable()">✕ Cancel</button>`;
+        document.getElementById(`edit-phone-${wardCode}-${puCode}`).focus();
+    }
+
+    async function saveOfficerEdit(wardCode, puCode) {
+        const phone = document.getElementById(`edit-phone-${wardCode}-${puCode}`).value.trim();
+        try {
+            const res = await fetch('/api/admin/update-officer', {
+                method: 'PUT',
+                headers: { 'Authorization': 'Bearer ' + _adminKey, 'Content-Type': 'application/json' },
+                body: JSON.stringify({ ward_code: wardCode, pu_code: puCode, phone })
+            });
+            const out = await res.json();
+            if (!res.ok) { alert(out.detail || 'Update failed'); return; }
+            loadOfficerTable();
+            loadStats();
+        } catch(e) { alert('Server error'); }
+    }
+
+    async function deleteOfficer(wardCode, puCode) {
+        if (!confirm(`Remove phone for officer ${wardCode}-${puCode}? This will prevent them from logging in via OTP.`)) return;
+        try {
+            const res = await fetch('/api/admin/delete-officer', {
+                method: 'DELETE',
+                headers: { 'Authorization': 'Bearer ' + _adminKey, 'Content-Type': 'application/json' },
+                body: JSON.stringify({ ward_code: wardCode, pu_code: puCode })
+            });
+            const out = await res.json();
+            if (!res.ok) { alert(out.detail || 'Delete failed'); return; }
+            loadOfficerTable();
+            loadStats();
+        } catch(e) { alert('Server error'); }
+    }
+
+    // Override loadStats to also load officer table after login
+    const _origLoadStats = loadStats;
+    async function loadStats() {
+        await _origLoadStats();
+        if (_adminKey) loadOfficerTable(1, '');
+    }
 </script>
 </body>
 </html>
 """
 
 # ── Admin portal ─────────────────────────────────────────────────────────────
+
+# ── Admin: list registered officers (with phone) ──────────────────────────────
+@app.get("/api/admin/list-officers")
+async def list_officers(request: Request, page: int = 1, q: str = ""):
+    auth = request.headers.get("Authorization", "")
+    token = request.cookies.get("ds_session")
+    if not (auth.startswith("Bearer ") and secrets.compare_digest(
+        hashlib.sha256(auth.split(" ", 1)[1].strip().encode()).hexdigest(), _DASHBOARD_KEY_HASH
+    )) and not _is_valid_token(token):
+        raise HTTPException(status_code=403, detail="Not authorised")
+    PAGE_SIZE = 50
+    offset = (page - 1) * PAGE_SIZE
+    with get_db() as conn:
+        with conn.cursor() as cur:
+            if q:
+                like = f"%{q}%"
+                cur.execute("""SELECT ward_code, pu_code, lg, ward, location, officer_phone
+                               FROM polling_units
+                               WHERE LOWER(state)='osun' AND officer_phone IS NOT NULL AND officer_phone != ''
+                               AND (ward_code LIKE ? OR pu_code LIKE ? OR LOWER(lg) LIKE ? OR officer_phone LIKE ?)
+                               ORDER BY ward_code, pu_code LIMIT ? OFFSET ?""",
+                            (like, like, like.lower(), like, PAGE_SIZE, offset))
+            else:
+                cur.execute("""SELECT ward_code, pu_code, lg, ward, location, officer_phone
+                               FROM polling_units
+                               WHERE LOWER(state)='osun' AND officer_phone IS NOT NULL AND officer_phone != ''
+                               ORDER BY ward_code, pu_code LIMIT ? OFFSET ?""",
+                            (PAGE_SIZE, offset))
+            rows = cur.fetchall()
+            cur.execute("""SELECT COUNT(*) as c FROM polling_units
+                           WHERE LOWER(state)='osun' AND officer_phone IS NOT NULL AND officer_phone != ''""")
+            total = cur.fetchone()["c"]
+    return {
+        "officers": [dict(r) for r in rows],
+        "total": total,
+        "page": page,
+        "pages": max(1, -(-total // PAGE_SIZE))
+    }
+
+
+# ── Admin: update a single officer phone ─────────────────────────────────────
+@app.put("/api/admin/update-officer")
+async def update_officer(request: Request):
+    """Body: { "ward_code": "10", "pu_code": "001", "phone": "+2348012345678" }"""
+    auth = request.headers.get("Authorization", "")
+    token = request.cookies.get("ds_session")
+    if not (auth.startswith("Bearer ") and secrets.compare_digest(
+        hashlib.sha256(auth.split(" ", 1)[1].strip().encode()).hexdigest(), _DASHBOARD_KEY_HASH
+    )) and not _is_valid_token(token):
+        raise HTTPException(status_code=403, detail="Not authorised")
+    try:
+        body = await request.json()
+    except Exception:
+        raise HTTPException(status_code=400, detail="Invalid JSON")
+    ward_code = str(body.get("ward_code", "")).strip()
+    pu_code   = str(body.get("pu_code", "")).strip()
+    phone     = _clean_phone(str(body.get("phone", "")).strip())
+    if not ward_code or not pu_code:
+        raise HTTPException(status_code=400, detail="ward_code and pu_code required")
+    if phone and len(phone) < 10:
+        raise HTTPException(status_code=400, detail="Invalid phone number")
+    with get_db() as conn:
+        with conn.cursor() as cur:
+            cur.execute("""UPDATE polling_units SET officer_phone = ?
+                           WHERE ward_code = ? AND pu_code = ? AND LOWER(state)='osun'""",
+                        (phone or None, ward_code, pu_code))
+            changed = conn._conn.total_changes
+        conn.commit()
+    if not changed:
+        raise HTTPException(status_code=404, detail="Officer not found")
+    return {"status": "ok", "phone": phone}
+
+
+# ── Admin: delete officer phone (clear it) ───────────────────────────────────
+@app.delete("/api/admin/delete-officer")
+async def delete_officer(request: Request):
+    """Body: { "ward_code": "10", "pu_code": "001" }"""
+    auth = request.headers.get("Authorization", "")
+    token = request.cookies.get("ds_session")
+    if not (auth.startswith("Bearer ") and secrets.compare_digest(
+        hashlib.sha256(auth.split(" ", 1)[1].strip().encode()).hexdigest(), _DASHBOARD_KEY_HASH
+    )) and not _is_valid_token(token):
+        raise HTTPException(status_code=403, detail="Not authorised")
+    try:
+        body = await request.json()
+    except Exception:
+        raise HTTPException(status_code=400, detail="Invalid JSON")
+    ward_code = str(body.get("ward_code", "")).strip()
+    pu_code   = str(body.get("pu_code", "")).strip()
+    if not ward_code or not pu_code:
+        raise HTTPException(status_code=400, detail="ward_code and pu_code required")
+    with get_db() as conn:
+        with conn.cursor() as cur:
+            cur.execute("""UPDATE polling_units SET officer_phone = NULL
+                           WHERE ward_code = ? AND pu_code = ? AND LOWER(state)='osun'""",
+                        (ward_code, pu_code))
+            changed = conn._conn.total_changes
+        conn.commit()
+    if not changed:
+        raise HTTPException(status_code=404, detail="Officer not found")
+    return {"status": "ok"}
+
+
+# ── Admin: list all submitted results (paginated) ────────────────────────────
+@app.get("/api/admin/results")
+async def admin_list_results(request: Request, page: int = 1, lga: str = "", status: str = ""):
+    auth = request.headers.get("Authorization", "")
+    token = request.cookies.get("ds_session")
+    if not (auth.startswith("Bearer ") and secrets.compare_digest(
+        hashlib.sha256(auth.split(" ", 1)[1].strip().encode()).hexdigest(), _DASHBOARD_KEY_HASH
+    )) and not _is_valid_token(token):
+        raise HTTPException(status_code=403, detail="Not authorised")
+    PAGE_SIZE = 50
+    offset = (page - 1) * PAGE_SIZE
+    filters, params = [], []
+    if lga:
+        filters.append("LOWER(lg) = LOWER(?)")
+        params.append(lga)
+    if status == "reviewed":
+        filters.append("reviewed = 1")
+    elif status == "pending":
+        filters.append("(reviewed IS NULL OR reviewed = 0)")
+    where = ("WHERE " + " AND ".join(filters)) if filters else ""
+    with get_db() as conn:
+        with conn.cursor() as cur:
+            cur.execute(f"SELECT COUNT(*) as c FROM field_submissions {where}", params)
+            total = cur.fetchone()["c"]
+            cur.execute(f"""SELECT id, officer_id, state, lg, ward, ward_code, pu_code, location,
+                                   reg_voters, total_accredited, valid_votes, rejected_votes, total_cast,
+                                   votes_json, edited_votes_json, ec8e_image, timestamp,
+                                   reviewed, reviewed_by, reviewed_at, edit_note
+                            FROM field_submissions {where}
+                            ORDER BY timestamp DESC LIMIT ? OFFSET ?""",
+                        params + [PAGE_SIZE, offset])
+            rows = cur.fetchall()
+    results = []
+    for r in rows:
+        votes = json.loads(r["edited_votes_json"] or r["votes_json"] or "{}")
+        results.append({
+            "id": r["id"],
+            "officer_id": r["officer_id"],
+            "lg": r["lg"],
+            "ward": r["ward"],
+            "location": r["location"],
+            "pu_code": r["pu_code"],
+            "reg_voters": r["reg_voters"] or 0,
+            "total_accredited": r["total_accredited"] or 0,
+            "valid_votes": r["valid_votes"] or 0,
+            "rejected_votes": r["rejected_votes"] or 0,
+            "total_cast": r["total_cast"] or 0,
+            "votes": votes,
+            "ec8e_image": r["ec8e_image"],
+            "timestamp": r["timestamp"],
+            "reviewed": bool(r["reviewed"]),
+            "reviewed_by": r["reviewed_by"],
+            "reviewed_at": r["reviewed_at"],
+            "edit_note": r["edit_note"],
+        })
+    return {"results": results, "total": total, "page": page, "pages": max(1, -(-total // PAGE_SIZE))}
+
+
+# ── Admin: edit a submitted result ───────────────────────────────────────────
+@app.put("/api/admin/results/{submission_id}")
+async def admin_edit_result(submission_id: int, request: Request):
+    """
+    Editable fields: votes (dict), total_accredited, total_cast,
+                     valid_votes, rejected_votes, reg_voters, edit_note
+    """
+    auth = request.headers.get("Authorization", "")
+    token = request.cookies.get("ds_session")
+    if not (auth.startswith("Bearer ") and secrets.compare_digest(
+        hashlib.sha256(auth.split(" ", 1)[1].strip().encode()).hexdigest(), _DASHBOARD_KEY_HASH
+    )) and not _is_valid_token(token):
+        raise HTTPException(status_code=403, detail="Not authorised")
+    try:
+        body = await request.json()
+    except Exception:
+        raise HTTPException(status_code=400, detail="Invalid JSON")
+
+    now = datetime.now().isoformat()
+    with get_db() as conn:
+        with conn.cursor() as cur:
+            cur.execute("SELECT * FROM field_submissions WHERE id=?", (submission_id,))
+            row = cur.fetchone()
+            if not row:
+                raise HTTPException(status_code=404, detail="Submission not found")
+
+            updates, vals, audit_entries = [], [], []
+            old_votes = json.loads(row["edited_votes_json"] or row["votes_json"] or "{}")
+
+            if "votes" in body:
+                new_votes = {k: int(v) for k, v in body["votes"].items()}
+                updates.append("edited_votes_json = ?")
+                vals.append(json.dumps(new_votes))
+                audit_entries.append(("edit", "votes", json.dumps(old_votes), json.dumps(new_votes)))
+
+            for field in ["total_accredited", "total_cast", "valid_votes", "rejected_votes", "reg_voters"]:
+                if field in body:
+                    old_val = row[field]
+                    new_val = int(body[field])
+                    updates.append(f"{field} = ?")
+                    vals.append(new_val)
+                    audit_entries.append(("edit", field, str(old_val), str(new_val)))
+
+            if "edit_note" in body:
+                updates.append("edit_note = ?")
+                vals.append(str(body["edit_note"])[:500])
+
+            if not updates:
+                raise HTTPException(status_code=400, detail="No editable fields provided")
+
+            vals.append(submission_id)
+            cur.execute(f"UPDATE field_submissions SET {', '.join(updates)} WHERE id=?", vals)
+
+            for action, field, old_v, new_v in audit_entries:
+                cur.execute("""INSERT INTO result_audit_log
+                               (submission_id, action, field, old_value, new_value, changed_by, changed_at)
+                               VALUES (?,?,?,?,?,?,?)""",
+                            (submission_id, action, field, old_v, new_v, "admin", now))
+        conn.commit()
+    return {"status": "ok", "id": submission_id}
+
+
+# ── Admin: approve / unapprove a result ──────────────────────────────────────
+@app.post("/api/admin/results/{submission_id}/approve")
+async def admin_approve_result(submission_id: int, request: Request):
+    auth = request.headers.get("Authorization", "")
+    token = request.cookies.get("ds_session")
+    if not (auth.startswith("Bearer ") and secrets.compare_digest(
+        hashlib.sha256(auth.split(" ", 1)[1].strip().encode()).hexdigest(), _DASHBOARD_KEY_HASH
+    )) and not _is_valid_token(token):
+        raise HTTPException(status_code=403, detail="Not authorised")
+    try:
+        body = await request.json()
+    except Exception:
+        body = {}
+    approve = bool(body.get("approve", True))
+    now = datetime.now().isoformat()
+    with get_db() as conn:
+        with conn.cursor() as cur:
+            cur.execute("SELECT reviewed FROM field_submissions WHERE id=?", (submission_id,))
+            row = cur.fetchone()
+            if not row:
+                raise HTTPException(status_code=404, detail="Submission not found")
+            cur.execute("""UPDATE field_submissions
+                           SET reviewed=?, reviewed_by='admin', reviewed_at=?
+                           WHERE id=?""",
+                        (1 if approve else 0, now, submission_id))
+            cur.execute("""INSERT INTO result_audit_log
+                           (submission_id, action, field, old_value, new_value, changed_by, changed_at)
+                           VALUES (?,?,?,?,?,?,?)""",
+                        (submission_id,
+                         "approve" if approve else "unapprove",
+                         "reviewed",
+                         str(bool(row["reviewed"])),
+                         str(approve),
+                         "admin", now))
+        conn.commit()
+    return {"status": "ok", "reviewed": approve}
+
+
+# ── Admin: pending review count (for dashboard badge) ────────────────────────
+@app.get("/api/admin/pending-review-count")
+async def pending_review_count(request: Request):
+    _require_dashboard(request)
+    with get_db() as conn:
+        with conn.cursor() as cur:
+            cur.execute("SELECT COUNT(*) as c FROM field_submissions WHERE reviewed=0 OR reviewed IS NULL")
+            pending = cur.fetchone()["c"]
+            cur.execute("SELECT COUNT(*) as c FROM field_submissions")
+            total = cur.fetchone()["c"]
+    return {"pending": pending, "total": total}
+
+
+# ── Admin: results portal page ───────────────────────────────────────────────
+@app.get("/admin/results", response_class=HTMLResponse)
+async def admin_results_page(request: Request):
+    return HTMLResponse(content=RESULTS_PORTAL_HTML)
+
+
 @app.get("/admin", response_class=HTMLResponse)
 async def admin_page(request: Request):
     """Protected admin portal — requires DASHBOARD_KEY as Bearer token via
@@ -3437,7 +4281,7 @@ async def swing_pus(request: Request):
         swing = []
         for r in rows:
             try:
-                v = json.loads(r["votes_json"]) if isinstance(r["votes_json"], str) else (r["votes_json"] or {})
+                v = json.loads(r.get("edited_votes_json") or r["votes_json"] or "{}") if isinstance(r.get("edited_votes_json") or r.get("votes_json"), str) else (r.get("edited_votes_json") or r.get("votes_json") or {})
             except Exception:
                 v = {}
             accord = v.get("ACCORD", 0)
