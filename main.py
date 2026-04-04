@@ -188,6 +188,25 @@ def _mask_phone(phone: str) -> str:
         return "****"
     return phone[:4] + "***" + phone[-4:]
 
+def _clean_phone(p: str) -> str:
+    """Normalize Nigerian phone numbers to E.164 format (+234XXXXXXXXXX).
+    Handles: 0812..., 234812..., +234812..., spaces/dashes.
+    """
+    import re as _re
+    p = _re.sub(r"[^+0-9]", "", str(p).strip())
+    if not p:
+        return ""
+    if p.startswith("+"):
+        return p  # already E.164
+    if p.startswith("234"):
+        return "+" + p
+    if p.startswith("0"):
+        return "+234" + p[1:]
+    # bare 10-digit number without leading zero e.g. 8012345678
+    if len(p) == 10:
+        return "+234" + p
+    return "+" + p  # best-effort
+
 def _make_submit_token(officer_id: str) -> str:
     """Short-lived signed token that authorises one submission."""
     import hmac as _hmac
@@ -768,8 +787,8 @@ async def request_otp(request: Request):
 
     officer_id = str(body.get("officer_id", "")).strip()[:60]
     lg         = str(body.get("lg", "")).strip()[:60]
-    import re as _re2
-    officer_id = _re2.sub(r"[^A-Za-z0-9\-/_ ]", "", officer_id)
+    import re as _re_otp
+    officer_id = _re_otp.sub(r"[^A-Za-z0-9\-/_ ]", "", officer_id)
 
     if not lg:
         raise HTTPException(status_code=400, detail="LGA is required.")
@@ -815,6 +834,14 @@ async def request_otp(request: Request):
             "message": "No phone number registered for this officer ID. Contact your supervisor."
         }
 
+    # Normalize to E.164 before sending — phones may be stored as 0812... or 234812...
+    phone = _clean_phone(phone)
+    if len(phone) < 10:
+        return {
+            "status": "no_phone",
+            "message": "Phone number on file is invalid. Contact your supervisor."
+        }
+
     # Generate OTP and store
     otp = _generate_otp()
     _OTP_STORE[otp_key] = {
@@ -843,9 +870,17 @@ async def request_otp(request: Request):
         auth_token  = os.environ.get("TWILIO_AUTH_TOKEN", "")
         from_number = os.environ.get("TWILIO_WHATSAPP_FROM", "+14155238886")
         if not account_sid or not auth_token:
-            logger.warning("Twilio not configured — OTP not sent (dev mode)")
-            # In dev, log OTP for testing
-            logger.info(f"[DEV OTP] {officer_id}: {otp}")
+            # In production this is a hard error — officer cannot authenticate without OTP
+            dev_mode = os.environ.get("OTP_DEV_MODE", "").lower() in ("1", "true", "yes")
+            if dev_mode:
+                logger.warning("Twilio not configured — OTP not sent (dev mode)")
+                logger.info(f"[DEV OTP] {officer_id}: {otp}")
+            else:
+                logger.error("Twilio credentials missing — cannot send OTP")
+                raise HTTPException(
+                    status_code=503,
+                    detail="OTP service is not configured. Contact your administrator."
+                )
         else:
             client = _TC(account_sid, auth_token)
             msg = (
@@ -990,13 +1025,6 @@ async def set_officer_phone(request: Request):
         body = await request.json()
     except Exception:
         raise HTTPException(status_code=400, detail="Invalid JSON body")
-
-    import re as _re
-    def _clean_phone(p: str) -> str:
-        p = _re.sub(r"[^+0-9]", "", str(p))
-        if not p.startswith("+"):
-            p = "+234" + p.lstrip("0")
-        return p
 
     records = body.get("officers") or ([body] if "officer_id" in body else [])
     if not records:
