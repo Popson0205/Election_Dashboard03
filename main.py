@@ -1186,7 +1186,7 @@ RESULTS_PORTAL_HTML = """
 body{font-family:'Inter',sans-serif;background:var(--dark);color:#fff;min-height:100vh}
 body::before{content:'';position:fixed;inset:0;z-index:0;background:radial-gradient(ellipse 120% 80% at 50% -10%,rgba(0,135,81,0.15) 0%,transparent 60%),linear-gradient(160deg,#020c06 0%,#041508 40%,#020c06 100%)}
 .page{position:relative;z-index:1;max-width:1100px;margin:0 auto;padding:28px 20px 60px}
-#loginGate{min-height:100vh;display:flex;align-items:center;justify-content:center}
+#loginGate{min-height:100vh;display:flex;align-items:center;justify-content:center;position:relative;z-index:1}
 .login-card{background:var(--panel);border:1px solid rgba(0,135,81,0.25);border-radius:20px;padding:48px 40px;width:100%;max-width:400px;text-align:center}
 .lock-icon{width:60px;height:60px;border-radius:50%;background:rgba(0,135,81,0.15);border:2px solid rgba(0,135,81,0.3);display:flex;align-items:center;justify-content:center;font-size:1.6rem;margin:0 auto 20px}
 h1{font-size:1.5rem;font-weight:800;margin-bottom:6px}
