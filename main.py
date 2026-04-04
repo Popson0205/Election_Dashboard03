@@ -22,7 +22,8 @@ def send_whatsapp_alert(payload: dict):
         account_sid = os.environ.get("TWILIO_ACCOUNT_SID", "")
         auth_token  = os.environ.get("TWILIO_AUTH_TOKEN", "")
         from_number = os.environ.get("TWILIO_WHATSAPP_FROM", "+14155238886")
-        to_number   = "whatsapp:+2349160420100"
+        recipients_env = os.environ.get("WHATSAPP_RECIPIENTS", "+2349160420100")
+        to_numbers = [f"whatsapp:{n.strip()}" for n in recipients_env.split(",")]
         if not account_sid or not auth_token:
             logger.warning("Twilio credentials not set — WhatsApp alert skipped.")
             return
@@ -50,10 +51,14 @@ def send_whatsapp_alert(payload: dict):
             f"_Powered by Popson Geospatial Services_"
         )
         client = Client(account_sid, auth_token)
-        client.messages.create(from_=f"whatsapp:{from_number}", to=to_number, body=msg)
-        logger.info(f"✅ WhatsApp alert sent for PU: {payload.get('pu_code')}")
+        for to_number in to_numbers:
+            try:
+                client.messages.create(from_=f"whatsapp:{from_number}", to=to_number, body=msg)
+                logger.info(f"✅ WhatsApp alert sent to {to_number} for PU: {payload.get('pu_code')}")
+            except Exception as sms_err:
+                logger.error(f"Failed to send to {to_number}: {sms_err}")
     except Exception as e:
-        logger.error(f"WhatsApp alert failed: {e}")
+        logger.error(f"WhatsApp alert failed: {type(e).__name__}: {e}", exc_info=True)
 
 # --- CONFIGURATION ---
 logging.basicConfig(level=logging.INFO)
@@ -308,7 +313,7 @@ async def submit(
                 ))
                 conn.commit()
         alert_payload = {**payload, "timestamp": datetime.now().strftime("%d %b %Y %H:%M")}
-        threading.Thread(target=send_whatsapp_alert, args=(alert_payload,), daemon=True).start()
+        threading.Thread(target=send_whatsapp_alert, args=(alert_payload,)).start()
         return {"status": "success", "message": "Result Uploaded Successfully"}
     except sqlite3.IntegrityError:
         return {"status": "error", "message": "REJECTED: A submission for this Polling Unit already exists."}
