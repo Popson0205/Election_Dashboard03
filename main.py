@@ -152,7 +152,7 @@ def _make_session_token() -> str:
     _SESSION_TOKENS[token] = time.time() + _SESSION_TTL
     return token
 
-def _is_valid_token(token: str | None) -> bool:
+def _is_valid_token(token) -> bool:  # accepts str or None
     if not token:
         return False
     expiry = _SESSION_TOKENS.get(token)
@@ -660,12 +660,15 @@ async def verify_dashboard(request: Request, response: Response):
     if not secrets.compare_digest(given_hash, _DASHBOARD_KEY_HASH):
         raise HTTPException(status_code=401, detail="Invalid dashboard key")
     token = _make_session_token()
+    # secure flag: True only when request came in over HTTPS
+    # (Render/cloud proxies forward as HTTP internally — check X-Forwarded-Proto)
+    is_https = request.headers.get("x-forwarded-proto", "http") == "https"
     response.set_cookie(
         key="ds_session",
         value=token,
         httponly=True,
         samesite="lax",
-        secure=True,
+        secure=is_https,
         max_age=_SESSION_TTL,
         path="/"
     )
@@ -2134,7 +2137,7 @@ INCIDENT_DASHBOARD_HTML = """
 
     async function loadIncidents() {
         try {
-            const res = await fetch('/api/incidents');
+            const res = await fetch('/api/incidents', { credentials: 'include' });
             allIncidents = await res.json();
             document.getElementById('last-refresh').textContent = 'Last refresh: ' + new Date().toLocaleTimeString('en-NG');
             populateLGAFilter();
@@ -2817,7 +2820,7 @@ DASHBOARD_HTML = """
 
     async function loadFilters() {
         try {
-            const res = await fetch(window.location.origin + '/api/dashboard_filters');
+            const res = await fetch(window.location.origin + '/api/dashboard_filters', { credentials: 'include' });
             filterLookup = await res.json();
             // BUG FIX #6: normalize state to lowercase for consistent comparison
             filterLookup = filterLookup.map(x => ({ ...x, state: (x.state||'').toLowerCase() }));
@@ -2847,7 +2850,7 @@ DASHBOARD_HTML = """
 
     async function refreshData() {
         try {
-            const res = await fetch(window.location.origin + '/submissions');
+            const res = await fetch(window.location.origin + '/submissions', { credentials: 'include' });
             globalData = await res.json();
             // BUG FIX #6: normalize state to lowercase in submission data too
             globalData = globalData.map(x => ({ ...x, state: (x.state||'').toLowerCase() }));
@@ -2995,6 +2998,7 @@ DASHBOARD_HTML = """
             const payload = Object.assign({}, totals, { lg: l || 'ALL', state: s || 'Osun' });
             const res = await fetch(window.location.origin + "/api/ai_interpret", {
                 method: 'POST', headers: { 'Content-Type': 'application/json' },
+                credentials: 'include',
                 body: JSON.stringify(payload)
             });
             const out = await res.json();
@@ -3206,7 +3210,7 @@ async function loadInsights() {
 
 async function loadLGACompletion() {
     try {
-        const res = await fetch(window.location.origin + '/api/lga_completion');
+        const res = await fetch(window.location.origin + '/api/lga_completion', { credentials: 'include' });
         const data = await res.json();
         const el = document.getElementById('lgaCompletionList');
         const ovEl = document.getElementById('ov-lga-inner');
@@ -3254,7 +3258,7 @@ async function loadLGACompletion() {
 
 async function loadSwingPUs() {
     try {
-        const res = await fetch(window.location.origin + '/api/swing_pus');
+        const res = await fetch(window.location.origin + '/api/swing_pus', { credentials: 'include' });
         const data = await res.json();
         const el = document.getElementById('swingList');
         const ovEl = document.getElementById('ov-swing-inner');
@@ -3274,7 +3278,7 @@ async function loadSwingPUs() {
 
 async function loadIntegrityFlags() {
     try {
-        const res = await fetch(window.location.origin + '/api/integrity_flags');
+        const res = await fetch(window.location.origin + '/api/integrity_flags', { credentials: 'include' });
         const data = await res.json();
         const el = document.getElementById('flagList');
         const ovEl = document.getElementById('ov-flags-inner');
@@ -3297,7 +3301,7 @@ async function loadIntegrityFlags() {
 
 async function loadAgentLeaderboard() {
     try {
-        const res = await fetch(window.location.origin + '/api/agent_leaderboard');
+        const res = await fetch(window.location.origin + '/api/agent_leaderboard', { credentials: 'include' });
         const data = await res.json();
         const el = document.getElementById('agentList');
         const ovEl = document.getElementById('ov-agentList');
@@ -3315,7 +3319,7 @@ async function loadAgentLeaderboard() {
 
 async function loadCollationTimeline() {
     try {
-        const res = await fetch(window.location.origin + '/api/collation_timeline');
+        const res = await fetch(window.location.origin + '/api/collation_timeline', { credentials: 'include' });
         const data = await res.json();
         const statusEl = document.getElementById('timelineStatus');
         const listEl = document.getElementById('ov-timeline-list');
