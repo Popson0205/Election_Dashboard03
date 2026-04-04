@@ -607,8 +607,574 @@ async def serve_ec8e(filename: str):
         "Access-Control-Allow-Origin": "*"
     })
 
+
 @app.get("/", response_class=HTMLResponse)
-async def index():
+async def homepage():
+    return HTMLResponse(content=HOMEPAGE_HTML)
+
+HOMEPAGE_HTML = """
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <meta name="theme-color" content="#008751">
+    <title>ACCORD — Osun 2026 Command System</title>
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;600;700;900&display=swap" rel="stylesheet">
+    <style>
+        *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+
+        :root {
+            --green: #008751;
+            --green-light: #00b368;
+            --gold: #ffc107;
+            --dark: #030a05;
+            --panel: rgba(255,255,255,0.04);
+            --border: rgba(255,255,255,0.08);
+        }
+
+        body {
+            font-family: 'Inter', sans-serif;
+            background: var(--dark);
+            color: #fff;
+            min-height: 100vh;
+            overflow-x: hidden;
+        }
+
+        /* ── Animated canvas background ── */
+        #bg-canvas {
+            position: fixed;
+            inset: 0;
+            z-index: 0;
+            opacity: 0.55;
+        }
+
+        /* ── Grid overlay ── */
+        .grid-overlay {
+            position: fixed;
+            inset: 0;
+            z-index: 1;
+            background-image:
+                linear-gradient(rgba(0,135,81,0.04) 1px, transparent 1px),
+                linear-gradient(90deg, rgba(0,135,81,0.04) 1px, transparent 1px);
+            background-size: 60px 60px;
+            pointer-events: none;
+        }
+
+        /* ── Radial glow ── */
+        .glow-center {
+            position: fixed;
+            top: 50%; left: 50%;
+            transform: translate(-50%, -50%);
+            width: 900px; height: 900px;
+            background: radial-gradient(circle, rgba(0,135,81,0.12) 0%, transparent 70%);
+            z-index: 1;
+            pointer-events: none;
+        }
+
+        /* ── Main layout ── */
+        .wrapper {
+            position: relative;
+            z-index: 2;
+            min-height: 100vh;
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            justify-content: center;
+            padding: 40px 20px;
+        }
+
+        /* ── Header ── */
+        .header {
+            text-align: center;
+            margin-bottom: 56px;
+            animation: fadeUp 0.8s ease both;
+        }
+
+        .logo-ring {
+            width: 110px; height: 110px;
+            border-radius: 50%;
+            border: 2px solid rgba(0,135,81,0.5);
+            display: flex; align-items: center; justify-content: center;
+            margin: 0 auto 24px;
+            background: rgba(0,135,81,0.08);
+            box-shadow: 0 0 40px rgba(0,135,81,0.25), inset 0 0 20px rgba(0,135,81,0.05);
+            position: relative;
+            animation: pulse-ring 3s ease-in-out infinite;
+        }
+
+        .logo-ring::before {
+            content: '';
+            position: absolute;
+            inset: -8px;
+            border-radius: 50%;
+            border: 1px solid rgba(0,135,81,0.2);
+            animation: spin-slow 12s linear infinite;
+        }
+
+        .logo-ring::after {
+            content: '';
+            position: absolute;
+            inset: -16px;
+            border-radius: 50%;
+            border: 1px dashed rgba(255,193,7,0.15);
+            animation: spin-slow 20s linear infinite reverse;
+        }
+
+        .logo-ring img {
+            width: 72px; height: 72px;
+            object-fit: contain;
+            filter: drop-shadow(0 0 12px rgba(0,135,81,0.6));
+        }
+
+        .system-tag {
+            display: inline-block;
+            font-size: 0.65rem;
+            font-weight: 700;
+            letter-spacing: 0.2em;
+            color: var(--gold);
+            background: rgba(255,193,7,0.1);
+            border: 1px solid rgba(255,193,7,0.25);
+            border-radius: 20px;
+            padding: 4px 14px;
+            margin-bottom: 16px;
+            text-transform: uppercase;
+        }
+
+        h1 {
+            font-size: clamp(1.8rem, 5vw, 3rem);
+            font-weight: 900;
+            line-height: 1.1;
+            letter-spacing: -0.02em;
+            background: linear-gradient(135deg, #fff 0%, rgba(255,255,255,0.7) 100%);
+            -webkit-background-clip: text;
+            -webkit-text-fill-color: transparent;
+            background-clip: text;
+            margin-bottom: 12px;
+        }
+
+        h1 span {
+            background: linear-gradient(135deg, var(--green-light), var(--gold));
+            -webkit-background-clip: text;
+            -webkit-text-fill-color: transparent;
+            background-clip: text;
+        }
+
+        .subtitle {
+            font-size: 0.95rem;
+            color: rgba(255,255,255,0.45);
+            font-weight: 400;
+            max-width: 480px;
+            margin: 0 auto;
+            line-height: 1.6;
+        }
+
+        /* ── Stats bar ── */
+        .stats-bar {
+            display: flex;
+            gap: 32px;
+            justify-content: center;
+            flex-wrap: wrap;
+            margin-bottom: 56px;
+            animation: fadeUp 0.8s 0.15s ease both;
+        }
+
+        .stat {
+            text-align: center;
+        }
+
+        .stat-val {
+            font-size: 1.5rem;
+            font-weight: 900;
+            color: var(--green-light);
+            display: block;
+            line-height: 1;
+        }
+
+        .stat-label {
+            font-size: 0.65rem;
+            color: rgba(255,255,255,0.3);
+            text-transform: uppercase;
+            letter-spacing: 0.1em;
+            margin-top: 4px;
+        }
+
+        .stat-divider {
+            width: 1px;
+            background: var(--border);
+            align-self: stretch;
+        }
+
+        /* ── Cards grid ── */
+        .cards-grid {
+            display: grid;
+            grid-template-columns: repeat(2, 1fr);
+            gap: 16px;
+            width: 100%;
+            max-width: 780px;
+            animation: fadeUp 0.8s 0.25s ease both;
+        }
+
+        .nav-card {
+            position: relative;
+            background: var(--panel);
+            border: 1px solid var(--border);
+            border-radius: 20px;
+            padding: 28px 24px;
+            cursor: pointer;
+            text-decoration: none;
+            color: #fff;
+            display: flex;
+            flex-direction: column;
+            gap: 12px;
+            overflow: hidden;
+            transition: transform 0.25s ease, border-color 0.25s ease, box-shadow 0.25s ease;
+            backdrop-filter: blur(12px);
+        }
+
+        .nav-card::before {
+            content: '';
+            position: absolute;
+            inset: 0;
+            border-radius: 20px;
+            opacity: 0;
+            transition: opacity 0.25s ease;
+        }
+
+        .nav-card:hover {
+            transform: translateY(-4px);
+            box-shadow: 0 20px 60px rgba(0,0,0,0.4);
+        }
+
+        .nav-card:hover::before { opacity: 1; }
+
+        /* Card colour themes */
+        .card-vote {
+            border-color: rgba(0,135,81,0.3);
+        }
+        .card-vote:hover {
+            border-color: rgba(0,135,81,0.7);
+            box-shadow: 0 20px 60px rgba(0,135,81,0.15);
+        }
+        .card-vote::before {
+            background: linear-gradient(135deg, rgba(0,135,81,0.08), transparent);
+        }
+
+        .card-report {
+            border-color: rgba(220,53,69,0.3);
+        }
+        .card-report:hover {
+            border-color: rgba(220,53,69,0.7);
+            box-shadow: 0 20px 60px rgba(220,53,69,0.15);
+        }
+        .card-report::before {
+            background: linear-gradient(135deg, rgba(220,53,69,0.08), transparent);
+        }
+
+        .card-vdash {
+            border-color: rgba(255,193,7,0.3);
+        }
+        .card-vdash:hover {
+            border-color: rgba(255,193,7,0.7);
+            box-shadow: 0 20px 60px rgba(255,193,7,0.12);
+        }
+        .card-vdash::before {
+            background: linear-gradient(135deg, rgba(255,193,7,0.06), transparent);
+        }
+
+        .card-idash {
+            border-color: rgba(13,202,240,0.3);
+        }
+        .card-idash:hover {
+            border-color: rgba(13,202,240,0.7);
+            box-shadow: 0 20px 60px rgba(13,202,240,0.12);
+        }
+        .card-idash::before {
+            background: linear-gradient(135deg, rgba(13,202,240,0.06), transparent);
+        }
+
+        .card-icon {
+            width: 48px; height: 48px;
+            border-radius: 14px;
+            display: flex; align-items: center; justify-content: center;
+            font-size: 1.4rem;
+            flex-shrink: 0;
+        }
+
+        .icon-vote   { background: rgba(0,135,81,0.15);  }
+        .icon-report { background: rgba(220,53,69,0.15); }
+        .icon-vdash  { background: rgba(255,193,7,0.12); }
+        .icon-idash  { background: rgba(13,202,240,0.12);}
+
+        .card-body { flex: 1; }
+
+        .card-title {
+            font-size: 1rem;
+            font-weight: 700;
+            margin-bottom: 6px;
+            display: flex; align-items: center; gap: 8px;
+        }
+
+        .card-badge {
+            font-size: 0.55rem;
+            font-weight: 700;
+            letter-spacing: 0.08em;
+            padding: 2px 8px;
+            border-radius: 20px;
+            text-transform: uppercase;
+        }
+
+        .badge-field    { background: rgba(0,135,81,0.2);  color: #00cc66; }
+        .badge-security { background: rgba(220,53,69,0.2); color: #ff6b6b; }
+        .badge-live     { background: rgba(255,193,7,0.2); color: #ffc107; }
+        .badge-command  { background: rgba(13,202,240,0.2);color: #0dcaf0; }
+
+        .card-desc {
+            font-size: 0.78rem;
+            color: rgba(255,255,255,0.4);
+            line-height: 1.5;
+        }
+
+        .card-arrow {
+            position: absolute;
+            bottom: 24px; right: 24px;
+            font-size: 1.1rem;
+            opacity: 0.3;
+            transition: opacity 0.2s, transform 0.2s;
+        }
+
+        .nav-card:hover .card-arrow {
+            opacity: 0.8;
+            transform: translate(3px, -3px);
+        }
+
+        /* ── Footer ── */
+        .footer {
+            margin-top: 48px;
+            text-align: center;
+            font-size: 0.7rem;
+            color: rgba(255,255,255,0.2);
+            animation: fadeUp 0.8s 0.4s ease both;
+        }
+
+        .footer strong { color: rgba(255,255,255,0.4); }
+
+        /* ── Animations ── */
+        @keyframes fadeUp {
+            from { opacity: 0; transform: translateY(20px); }
+            to   { opacity: 1; transform: translateY(0); }
+        }
+
+        @keyframes pulse-ring {
+            0%, 100% { box-shadow: 0 0 40px rgba(0,135,81,0.25), inset 0 0 20px rgba(0,135,81,0.05); }
+            50%       { box-shadow: 0 0 60px rgba(0,135,81,0.4),  inset 0 0 30px rgba(0,135,81,0.1); }
+        }
+
+        @keyframes spin-slow {
+            from { transform: rotate(0deg); }
+            to   { transform: rotate(360deg); }
+        }
+
+        /* ── Mobile ── */
+        @media (max-width: 600px) {
+            .cards-grid { grid-template-columns: 1fr; max-width: 400px; }
+            .stats-bar { gap: 20px; }
+            .stat-divider { display: none; }
+            h1 { font-size: 1.7rem; }
+        }
+    </style>
+</head>
+<body>
+
+<canvas id="bg-canvas"></canvas>
+<div class="grid-overlay"></div>
+<div class="glow-center"></div>
+
+<div class="wrapper">
+
+    <!-- Header -->
+    <div class="header">
+        <div class="logo-ring">
+            <img src="/logos/ACCORD.png" alt="ACCORD" onerror="this.src='https://via.placeholder.com/72x72/008751/ffffff?text=A'">
+        </div>
+        <div class="system-tag">Osun 2026 Governorship · Command System</div>
+        <h1>ACCORD <span>Intelligence</span><br>Operations Centre</h1>
+        <p class="subtitle">Real-time election collation, incident reporting and live analytics for the 2026 Osun Governorship Election.</p>
+    </div>
+
+    <!-- Stats bar -->
+    <div class="stats-bar">
+        <div class="stat">
+            <span class="stat-val">3,763</span>
+            <span class="stat-label">Polling Units</span>
+        </div>
+        <div class="stat-divider"></div>
+        <div class="stat">
+            <span class="stat-val">30</span>
+            <span class="stat-label">LGAs</span>
+        </div>
+        <div class="stat-divider"></div>
+        <div class="stat">
+            <span class="stat-val">332</span>
+            <span class="stat-label">Wards</span>
+        </div>
+        <div class="stat-divider"></div>
+        <div class="stat">
+            <span class="stat-val">14</span>
+            <span class="stat-label">Parties</span>
+        </div>
+    </div>
+
+    <!-- Navigation cards -->
+    <div class="cards-grid">
+
+        <a href="/vote" class="nav-card card-vote">
+            <div class="card-icon icon-vote">🗳️</div>
+            <div class="card-body">
+                <div class="card-title">
+                    Vote Submission
+                    <span class="card-badge badge-field">Field</span>
+                </div>
+                <p class="card-desc">Field officers submit polling unit results in real-time. Secure officer ID validation with auto-filled PU data.</p>
+            </div>
+            <span class="card-arrow">↗</span>
+        </a>
+
+        <a href="/report" class="nav-card card-report">
+            <div class="card-icon icon-report">🚨</div>
+            <div class="card-body">
+                <div class="card-title">
+                    Incident Report
+                    <span class="card-badge badge-security">Security</span>
+                </div>
+                <p class="card-desc">Report election irregularities, security threats, or misconduct. Attach photo evidence and GPS location.</p>
+            </div>
+            <span class="card-arrow">↗</span>
+        </a>
+
+        <a href="/dashboard" class="nav-card card-vdash">
+            <div class="card-icon icon-vdash">📊</div>
+            <div class="card-body">
+                <div class="card-title">
+                    Vote Dashboard
+                    <span class="card-badge badge-live">Live</span>
+                </div>
+                <p class="card-desc">Live vote tallies, party breakdowns, LGA completion tracker, swing PU analysis and AI analytics log.</p>
+            </div>
+            <span class="card-arrow">↗</span>
+        </a>
+
+        <a href="/incident-dashboard" class="nav-card card-idash">
+            <div class="card-icon icon-idash">🛡️</div>
+            <div class="card-body">
+                <div class="card-title">
+                    Incident Dashboard
+                    <span class="card-badge badge-command">Command</span>
+                </div>
+                <p class="card-desc">Security command centre — live incident feed, severity heatmap, evidence viewer and real-time map.</p>
+            </div>
+            <span class="card-arrow">↗</span>
+        </a>
+
+    </div>
+
+    <!-- Footer -->
+    <div class="footer">
+        <img src="/static/logos/popson-logo.png" style="height:18px;vertical-align:middle;margin-right:6px;opacity:0.4;" onerror="this.style.display='none'">
+        Powered by <strong>Popson Geospatial Services</strong> &nbsp;·&nbsp; ACCORD Party Osun 2026
+    </div>
+
+</div>
+
+<script>
+// ── Particle field canvas animation ──────────────────────────────────────────
+(function() {
+    const canvas = document.getElementById('bg-canvas');
+    const ctx = canvas.getContext('2d');
+    let W, H, particles = [], lines = [];
+    const COUNT = 80;
+    const GREEN = '0,135,81';
+    const GOLD  = '255,193,7';
+
+    function resize() {
+        W = canvas.width  = window.innerWidth;
+        H = canvas.height = window.innerHeight;
+    }
+
+    function Particle() {
+        this.reset = function() {
+            this.x  = Math.random() * W;
+            this.y  = Math.random() * H;
+            this.vx = (Math.random() - 0.5) * 0.4;
+            this.vy = (Math.random() - 0.5) * 0.4;
+            this.r  = Math.random() * 1.8 + 0.4;
+            this.color = Math.random() > 0.85 ? GOLD : GREEN;
+            this.alpha = Math.random() * 0.6 + 0.2;
+        };
+        this.reset();
+    }
+
+    function init() {
+        particles = [];
+        for (let i = 0; i < COUNT; i++) {
+            particles.push(new Particle());
+        }
+    }
+
+    function draw() {
+        ctx.clearRect(0, 0, W, H);
+
+        // Draw connecting lines between nearby particles
+        for (let i = 0; i < particles.length; i++) {
+            for (let j = i + 1; j < particles.length; j++) {
+                const dx = particles[i].x - particles[j].x;
+                const dy = particles[i].y - particles[j].y;
+                const dist = Math.sqrt(dx*dx + dy*dy);
+                if (dist < 130) {
+                    const alpha = (1 - dist / 130) * 0.18;
+                    ctx.beginPath();
+                    ctx.strokeStyle = `rgba(${GREEN},${alpha})`;
+                    ctx.lineWidth = 0.6;
+                    ctx.moveTo(particles[i].x, particles[i].y);
+                    ctx.lineTo(particles[j].x, particles[j].y);
+                    ctx.stroke();
+                }
+            }
+        }
+
+        // Draw particles
+        particles.forEach(p => {
+            ctx.beginPath();
+            ctx.arc(p.x, p.y, p.r, 0, Math.PI * 2);
+            ctx.fillStyle = `rgba(${p.color},${p.alpha})`;
+            ctx.fill();
+
+            p.x += p.vx;
+            p.y += p.vy;
+
+            if (p.x < -10) p.x = W + 10;
+            if (p.x > W + 10) p.x = -10;
+            if (p.y < -10) p.y = H + 10;
+            if (p.y > H + 10) p.y = -10;
+        });
+
+        requestAnimationFrame(draw);
+    }
+
+    window.addEventListener('resize', () => { resize(); init(); });
+    resize();
+    init();
+    draw();
+})();
+</script>
+
+</body>
+</html>
+"""
+# ─────────────────────────────────────────────────────────────────────────────
+
+@app.get("/vote", response_class=HTMLResponse)
+async def vote_form():
     parties = ["ACCORD", "AA", "AAC", "ADC", "ADP", "APGA", "APC", "APM", "APP", "BP", "NNPP", "PRP", "YPP", "ZLP"]
     party_cards = "".join([f'''
         <div class="col-4 col-md-2 mb-2">
@@ -970,7 +1536,7 @@ REPORT_HTML = """
         <div id="loginError" class="alert alert-danger d-none small py-2 mb-2"></div>
         <button class="btn btn-danger w-100 fw-bold" onclick="startReport()">Verify & Continue</button>
         <div class="mt-3">
-            <a href="/" class="small text-muted">← Back to Vote Submission</a>
+            <a href="/vote" class="small text-muted">← Back to Vote Submission</a>
         </div>
     </div>
 
@@ -1052,7 +1618,7 @@ REPORT_HTML = """
         <div id="submitError" class="alert alert-danger d-none small py-2 mb-2 fw-bold"></div>
         <button class="btn btn-danger btn-lg w-100 py-3 fw-bold" onclick="submitIncident()">🚨 SUBMIT INCIDENT REPORT</button>
         <div class="mt-3 text-center">
-            <a href="/" class="small text-white">← Back to Vote Submission</a>
+            <a href="/vote" class="small text-white">← Back to Vote Submission</a>
         </div>
     </div>
 </div>
