@@ -4002,6 +4002,7 @@ INCIDENT_DASHBOARD_HTML = """
     <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" />
     <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/bootstrap-icons@1.11.1/font/bootstrap-icons.css">
     <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
+    <script src="https://unpkg.com/leaflet.heat@0.2.0/dist/leaflet-heat.js"></script>
     <style>
         :root { --red: #cc0000; --orange: #ff6600; --gold: #ffc107; --dark: #0a0a0a; --panel: #141414; }
         body { background: var(--dark); color: #fff; font-family: 'Segoe UI', sans-serif; margin: 0; overflow-y: auto; }
@@ -4145,7 +4146,7 @@ INCIDENT_DASHBOARD_HTML = """
 </div>
 
 <script>
-    let map, allIncidents = [], markers = [];
+    let map, allIncidents = [], markers = [], heatLayer = null;
 
     const SEV_COLOR = { Critical: '#ff0000', Medium: '#ffc107', Low: '#00cc44' };
     const TYPE_ICON = {
@@ -4290,7 +4291,7 @@ INCIDENT_DASHBOARD_HTML = """
     document.addEventListener('DOMContentLoaded', () => {
         initMap();
         loadIncidents();
-        setInterval(loadIncidents, 30000);
+        setInterval(loadIncidents, 2000);
     });
 </script>
 </body>
@@ -4736,6 +4737,7 @@ DASHBOARD_HTML = """
     <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" />
     <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/bootstrap-icons@1.11.1/font/bootstrap-icons.css">
     <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
+    <script src="https://unpkg.com/leaflet.heat@0.2.0/dist/leaflet-heat.js"></script>
     <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
     <script src="https://cdn.jsdelivr.net/npm/chartjs-plugin-datalabels@2.0.0"></script>
 
@@ -4984,9 +4986,9 @@ DASHBOARD_HTML = """
         L.tileLayer('https://{s}.basemaps.cartocdn.com/dark_all/{z}/{x}/{y}{r}.png').addTo(map);
         loadFilters();
         refreshData();
-        setInterval(refreshData, 30000);
+        setInterval(refreshData, 2000);
         loadInsights();
-        setInterval(loadInsights, 60000);
+        setInterval(loadInsights, 2000);
     }
 
     async function loadFilters() {
@@ -5068,6 +5070,8 @@ DASHBOARD_HTML = """
 
         const searchTerm = (document.getElementById('puSearch').value || '').toLowerCase();
 
+        const heatPoints = [];
+
         data.forEach(d => {
             PARTIES.forEach(p => { t[p] += (d['votes_party_'+p] || 0); });
 
@@ -5084,23 +5088,54 @@ DASHBOARD_HTML = """
                     <div>ACCORD: <b style="color:#ffc107">${d.votes_party_ACCORD||0}</b></div>
                     <div>APC: ${d.votes_party_APC||0}</div>
                     <div>NNPP: ${d.votes_party_NNPP||0}</div>
-                    <div>ADC: ${d.votes_party_ADC||0}</div>
+                    <div>ADC: <b style="color:#17a2b8">${d.votes_party_ADC||0}</b></div>
                 </div>`;
             card.onclick = () => {
                 if(d.latitude) map.setView([d.latitude, d.longitude], 14);
                 showEc8e(d.ec8e_image, d.pu_name);
-                // Scroll EC8E panel into view
                 const panel = document.getElementById('ec8eViewerPanel');
                 if(panel) panel.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
             };
             list.appendChild(card);
 
             if(d.latitude) {
-                const m = L.circleMarker([d.latitude, d.longitude], { radius: 6, color: '#ffc107', fillOpacity: 0.8 }).addTo(map);
-                m.bindPopup(`<b>${d.pu_name}</b><br>ACCORD: ${d.votes_party_ACCORD||0}`);
+                // Circle marker coloured by winning party
+                const accord = d.votes_party_ACCORD || 0;
+                const apc    = d.votes_party_APC    || 0;
+                const pdp    = d.votes_party_PDP    || 0;
+                const adc    = d.votes_party_ADC    || 0;
+                const maxVotes = Math.max(accord, apc, pdp, adc,
+                    d.votes_party_LP||0, d.votes_party_NNPP||0);
+                let dotColor = '#ffc107';  // ACCORD gold
+                if      (apc === maxVotes && apc > accord) dotColor = '#0d6efd';  // APC blue
+                else if (pdp === maxVotes && pdp > accord) dotColor = '#dc3545';  // PDP red
+                else if (adc === maxVotes && adc > accord) dotColor = '#17a2b8';  // ADC teal
+
+                const m = L.circleMarker([d.latitude, d.longitude], {
+                    radius: 6, color: dotColor,
+                    fillColor: dotColor, fillOpacity: 0.85, weight: 1.5
+                }).addTo(map);
+                m.bindPopup(`<b>${d.pu_name}</b><br>
+                    ACCORD: <b style="color:#ffc107">${accord}</b> &nbsp;
+                    APC: ${apc} &nbsp; PDP: ${pdp} &nbsp;
+                    ADC: <span style="color:#17a2b8">${adc}</span>`);
                 markers.push(m);
+
+                // Add to heatmap — intensity based on ACCORD votes
+                const intensity = Math.min(1, accord / 500);
+                heatPoints.push([d.latitude, d.longitude, intensity]);
             }
         });
+
+        // Render heatmap layer
+        if (heatLayer) { map.removeLayer(heatLayer); heatLayer = null; }
+        if (heatPoints.length > 0) {
+            heatLayer = L.heatLayer(heatPoints, {
+                radius: 35, blur: 25, maxZoom: 12,
+                gradient: { 0.0: '#003300', 0.3: '#006600',
+                            0.6: '#ffc107', 1.0: '#ffffff' }
+            }).addTo(map);
+        }
 
         // BUG FIX #4: Update ALL 14 nav spans (hidden ones too) so overlays get correct data
         PARTIES.forEach(p => {
