@@ -4893,7 +4893,12 @@ DASHBOARD_HTML = """
     /* Centre column */
     .centre-col{display:flex;flex-direction:column;gap:8px;min-height:0;overflow:hidden;}
     #map{flex:0 0 42%;border-radius:12px;background:#0d1520;
-        border:1px solid var(--border);min-height:200px;z-index:1;}
+        border:1px solid rgba(245,166,35,0.2);min-height:200px;z-index:1;}
+    .leaflet-tile-pane{z-index:2;}
+    .leaflet-overlay-pane{z-index:3;}   /* heatmap goes here */
+    .leaflet-marker-pane{z-index:4;}    /* markers on top */
+    .leaflet-tooltip-pane{z-index:5;}
+    .leaflet-popup-pane{z-index:6;}
     .chart-row{display:grid;grid-template-columns:1fr 1fr;gap:8px;flex:1;min-height:120px;}
     .chart-box{background:var(--s1);border:1px solid var(--border);border-radius:12px;
         padding:12px;display:flex;flex-direction:column;min-height:0;overflow:hidden;}
@@ -5202,9 +5207,27 @@ DASHBOARD_HTML = """
 
     // ── Map init ──
     function init() {
-        map = L.map('map', {zoomControl:true}).setView([7.56, 4.52], 9);
-        L.tileLayer('https://{s}.basemaps.cartocdn.com/dark_matter/{z}/{x}/{y}{r}.png',
-            {attribution:'© CartoDB'}).addTo(map);
+        // Locked to Osun State
+        map = L.map('map', {
+            zoomControl:true,
+            minZoom:9, maxZoom:16
+        }).setView([7.56, 4.52], 10);
+
+        // Base tile layer — dark with labels visible
+        L.tileLayer(
+            'https://{s}.basemaps.cartocdn.com/dark_matter_all/{z}/{x}/{y}{r}.png',
+            { attribution:'© OpenStreetMap © CartoDB', subdomains:'abcd', maxZoom:19 }
+        ).addTo(map);
+
+        // Fit map to Osun State bounds
+        const osunBounds = L.latLngBounds([[6.35, 3.85], [8.15, 5.15]]);
+        map.fitBounds(osunBounds, {padding:[10,10]});
+        // Subtle boundary outline
+        L.rectangle(osunBounds, {
+            color:'rgba(245,166,35,0.35)', weight:1.5,
+            fill:false, dashArray:'6,4', interactive:false
+        }).addTo(map);
+
         refreshData();
         loadInsights();
     }
@@ -5338,7 +5361,8 @@ DASHBOARD_HTML = """
             if (d.latitude) {
                 const col = COLORS[winner] || '#F5A623';
                 const m = L.circleMarker([d.latitude, d.longitude], {
-                    radius:6, color:col, fillColor:col, fillOpacity:0.85, weight:1.5
+                    radius:7, color:'#fff', fillColor:col,
+                    fillOpacity:0.9, weight:1.5
                 }).addTo(map);
                 m.bindPopup(`<b>${d.pu_name}</b><br>
                     ACCORD: <b style="color:#F5A623">${d.votes_party_ACCORD||0}</b><br>
@@ -5349,13 +5373,22 @@ DASHBOARD_HTML = """
             }
         });
 
-        // Heatmap
+        // Heatmap — add FIRST so markers render on top
         if (heatLayer) { map.removeLayer(heatLayer); heatLayer = null; }
         if (typeof L.heatLayer !== 'undefined' && heatPoints.length > 0) {
             heatLayer = L.heatLayer(heatPoints, {
-                radius:35, blur:25, maxZoom:12,
-                gradient:{0.0:'#003300', 0.4:'#00875A', 0.7:'#F5A623', 1.0:'#ffffff'}
+                radius:40, blur:25, maxZoom:13, minOpacity:0.5,
+                gradient:{
+                    0.0: '#001a00',
+                    0.2: '#004d00',
+                    0.4: '#00aa44',
+                    0.6: '#ffaa00',
+                    0.8: '#ff6600',
+                    1.0: '#ffffff'
+                }
             }).addTo(map);
+            // Bring markers to front
+            markers.forEach(m => m.bringToFront && m.bringToFront());
         }
 
         // ── Update ALL nav party spans ──
@@ -5403,16 +5436,32 @@ DASHBOARD_HTML = """
         if(pie) pie.destroy();
         pie = new Chart(document.getElementById('pieChart'), {
             type:'doughnut',
-            data:{labels, datasets:[{data:vals, backgroundColor:colors, borderWidth:0, hoverOffset:4}]},
+            data:{labels, datasets:[{data:vals, backgroundColor:colors,
+                borderWidth:2, borderColor:'#0D0F14', hoverOffset:6}]},
             options:{
                 responsive:true, maintainAspectRatio:false,
                 plugins:{
-                    legend:{position:'bottom',labels:{color:'#6B7280',font:{size:9},boxWidth:10,padding:8}},
-                    datalabels:{color:'#fff',font:{weight:'bold',size:10},
-                        formatter:(val)=>total>0&&val>0?((val/total)*100).toFixed(1)+'%':''},
-                    tooltip:{callbacks:{label:ctx=>`${ctx.label}: ${ctx.parsed.toLocaleString()}`}}
+                    legend:{
+                        position:'bottom',
+                        labels:{color:'#9CA3AF',font:{size:9},
+                            boxWidth:10,padding:10,usePointStyle:true}
+                    },
+                    datalabels:{
+                        color:'#fff',
+                        font:{weight:'900',size:11},
+                        textShadowBlur:4,
+                        textShadowColor:'rgba(0,0,0,0.8)',
+                        formatter:(val,ctx)=>{
+                            if(total===0||val===0) return '';
+                            const pct=((val/total)*100).toFixed(1);
+                            return pct>5 ? pct+'%' : '';
+                        }
+                    },
+                    tooltip:{callbacks:{
+                        label:ctx=>`${ctx.label}: ${ctx.parsed.toLocaleString()} votes (${total>0?((ctx.parsed/total)*100).toFixed(1):0}%)`
+                    }}
                 },
-                cutout:'68%'
+                cutout:'60%'
             }
         });
 
