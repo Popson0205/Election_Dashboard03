@@ -4754,7 +4754,7 @@ DASHBOARD_HTML = """
         --text:   #F0F2F5;
         --muted:  #6B7280;
         --nav-h:  62px;
-        --kpi-h:  76px;
+        --kpi-h:  88px;
     }
     *,*::before,*::after{box-sizing:border-box;margin:0;padding:0;}
     html,body{height:100%;background:var(--bg);color:var(--text);
@@ -4811,9 +4811,9 @@ DASHBOARD_HTML = """
 
     /* ── KPI STRIP ── */
     .kpi-strip{display:grid;grid-template-columns:repeat(6,1fr);
-        gap:8px;padding:8px 16px;flex-shrink:0;height:var(--kpi-h);}
+        gap:8px;padding:8px 16px;flex-shrink:0;}
     .kpi{background:var(--s1);border:1px solid var(--border);border-radius:10px;
-        padding:9px 12px;position:relative;overflow:hidden;cursor:default;}
+        padding:12px 14px;position:relative;overflow:hidden;cursor:default;}
     .kpi::before{content:'';position:absolute;top:0;left:0;right:0;height:2px;border-radius:2px 2px 0 0;}
     .kpi-accord::before{background:linear-gradient(90deg,var(--gold),#ffd666);}
     .kpi-margin::before{background:linear-gradient(90deg,var(--apc),#60a5fa);}
@@ -4821,28 +4821,28 @@ DASHBOARD_HTML = """
     .kpi-accred::before{background:linear-gradient(90deg,#0891b2,#22d3ee);}
     .kpi-inc::before   {background:linear-gradient(90deg,var(--pdp),#f87171);}
     .kpi-turn::before  {background:linear-gradient(90deg,var(--adc),#34d399);}
-    .kpi-icon{font-size:0.85rem;margin-bottom:3px;display:block;}
+    .kpi-icon{font-size:1rem;margin-bottom:4px;display:block;opacity:0.9;}
     .kpi-accord .kpi-icon{color:var(--gold);}
     .kpi-margin .kpi-icon{color:#60a5fa;}
     .kpi-pus    .kpi-icon{color:#c084fc;}
     .kpi-accred .kpi-icon{color:#22d3ee;}
     .kpi-inc    .kpi-icon{color:#f87171;}
     .kpi-turn   .kpi-icon{color:#34d399;}
-    .kpi-val{font-size:1.3rem;font-weight:900;display:block;line-height:1.1;
-        transition:all 0.4s;}
-    .kpi-label{font-size:0.55rem;color:var(--muted);text-transform:uppercase;
-        letter-spacing:0.5px;margin-top:2px;}
+    .kpi-val{font-size:1.25rem;font-weight:900;display:block;line-height:1.1;
+        transition:all 0.4s;letter-spacing:-0.5px;}
+    .kpi-label{font-size:0.58rem;color:#9CA3AF;text-transform:uppercase;
+        letter-spacing:0.5px;margin-top:4px;display:block;font-weight:500;}
 
     /* ── MAIN GRID ── */
     .main-content{
         display:grid;grid-template-columns:290px 1fr 280px;
         gap:8px;padding:0 8px 8px;
-        height:calc(100vh - var(--nav-h) - var(--kpi-h));overflow:hidden;
+        height:calc(100vh - var(--nav-h) - var(--kpi-h) - 16px);overflow:hidden;
     }
     .side-panel{background:var(--s1);border:1px solid var(--border);border-radius:12px;
         display:flex;flex-direction:column;overflow:hidden;min-height:0;}
     .panel-header{padding:9px 14px;font-size:0.63rem;font-weight:700;
-        color:var(--muted);text-transform:uppercase;letter-spacing:1px;
+        color:#9CA3AF;text-transform:uppercase;letter-spacing:1px;
         border-bottom:1px solid var(--border);flex-shrink:0;
         display:flex;align-items:center;justify-content:space-between;}
     .ph-badge{background:var(--s2);border:1px solid var(--border);
@@ -4891,16 +4891,15 @@ DASHBOARD_HTML = """
         color:var(--gold);padding:1px 5px;border-radius:4px;margin-left:4px;}
 
     /* Centre column */
-    .centre-col{display:flex;flex-direction:column;gap:8px;min-height:0;overflow:hidden;}
-    #map{flex:0 0 44%;border-radius:12px;background:#0d1520;min-height:180px;
-        border:1px solid var(--border);}
+    .centre-col{display:flex;flex-direction:column;gap:8px;min-height:0;overflow:hidden;height:100%;}
+    #map{height:280px;flex-shrink:0;border-radius:12px;background:#0d1520;
+        border:1px solid var(--border);z-index:1;}
     .chart-row{display:grid;grid-template-columns:1fr 1fr;gap:8px;flex:1;min-height:0;}
     .chart-box{background:var(--s1);border:1px solid var(--border);border-radius:12px;
-        padding:11px;display:flex;flex-direction:column;min-height:0;overflow:hidden;
-        position:relative;}
-    .chart-title{font-size:0.6rem;font-weight:700;color:var(--muted);
+        padding:12px;display:flex;flex-direction:column;min-height:0;overflow:hidden;}
+    .chart-title{font-size:0.62rem;font-weight:700;color:#9CA3AF;
         text-transform:uppercase;letter-spacing:1px;margin-bottom:8px;flex-shrink:0;}
-    .chart-box canvas{display:block;width:100%!important;height:100%!important;max-height:100%;}
+    .chart-box canvas{display:block;width:100%!important;flex:1;min-height:0;}
 
     /* Right panel */
     .margin-card{margin:10px;background:var(--s2);border:1px solid rgba(245,166,35,0.2);
@@ -5406,7 +5405,7 @@ DASHBOARD_HTML = """
             type:'doughnut',
             data:{labels, datasets:[{data:vals, backgroundColor:colors, borderWidth:0, hoverOffset:4}]},
             options:{
-                responsive:true, maintainAspectRatio:true,
+                responsive:true, maintainAspectRatio:false,
                 plugins:{
                     legend:{position:'bottom',labels:{color:'#6B7280',font:{size:9},boxWidth:10,padding:8}},
                     datalabels:{color:'#fff',font:{weight:'bold',size:10},
@@ -5423,7 +5422,7 @@ DASHBOARD_HTML = """
             data:{labels, datasets:[{data:vals, backgroundColor:colors,
                 borderRadius:4, borderSkipped:false}]},
             options:{
-                responsive:true, maintainAspectRatio:true,
+                responsive:true, maintainAspectRatio:false,
                 plugins:{
                     legend:{display:false},
                     datalabels:{color:'#fff',anchor:'end',align:'top',
@@ -5482,19 +5481,21 @@ DASHBOARD_HTML = """
             el.innerHTML = '';
             const lgas = data.slice(0,15);
             lgas.forEach(row => {
-                const pct = Math.round((row.reported/Math.max(row.total,1))*100);
+                const pct = row.pct !== undefined ? row.pct
+                    : Math.round((row.submitted||row.reported||0) / Math.max(row.total,1) * 100);
                 const div = document.createElement('div');
                 div.className = 'lga-row';
                 div.innerHTML = `
-                    <span class="lga-name">${row.lga||row.name}</span>
+                    <span class="lga-name">${row.lga||row.name||''}</span>
                     <div class="lga-bar-bg">
-                        <div class="lga-bar-fill" style="width:${pct}%"></div>
+                        <div class="lga-bar-fill" style="width:${Math.min(pct,100)}%"></div>
                     </div>
                     <span class="lga-pct">${pct}%</span>`;
                 el.appendChild(div);
             });
             const countEl = document.getElementById('lga-count');
-            if(countEl) countEl.textContent = `${lgas.filter(r=>r.reported>0).length} / 30`;
+            if(countEl) countEl.textContent =
+                `${lgas.filter(r=>(r.submitted||r.reported||0)>0).length} / 30`;
         } catch(e) {}
     }
 
