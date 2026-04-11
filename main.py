@@ -4655,6 +4655,71 @@ DASHBOARD_LOGIN_HTML = """
 # ─────────────────────────────────────────────────────────────────────────────
 
 
+
+# ── Demo: clear all submissions ────────────────────────────────────────────────
+@app.post("/api/admin/clear-submissions")
+async def clear_submissions(request: Request):
+    auth = request.headers.get("Authorization", "")
+    if not (auth.startswith("Bearer ") and secrets.compare_digest(
+        hashlib.sha256(auth.split(" ", 1)[1].strip().encode()).hexdigest(),
+        _DASHBOARD_KEY_HASH
+    )):
+        raise HTTPException(status_code=403, detail="Not authorised")
+    with get_db() as conn:
+        with conn.cursor() as cur:
+            cur.execute("SELECT COUNT(*) FROM field_submissions")
+            count = cur.fetchone()[0]
+            cur.execute("DELETE FROM field_submissions")
+            try:
+                cur.execute("DELETE FROM sqlite_sequence WHERE name=\'field_submissions\'")
+            except Exception:
+                pass
+        conn.commit()
+    return {"status": "ok", "message": f"Cleared {count} submissions", "deleted": count}
+
+
+# ── Demo: create submission directly (no OTP) ───────────────────────────────────
+@app.post("/api/admin/create-submission")
+async def create_submission(request: Request):
+    auth = request.headers.get("Authorization", "")
+    if not (auth.startswith("Bearer ") and secrets.compare_digest(
+        hashlib.sha256(auth.split(" ", 1)[1].strip().encode()).hexdigest(),
+        _DASHBOARD_KEY_HASH
+    )):
+        raise HTTPException(status_code=403, detail="Not authorised")
+    body = await request.json()
+    now  = datetime.now().isoformat()
+    with get_db() as conn:
+        with conn.cursor() as cur:
+            cur.execute("""
+                INSERT OR REPLACE INTO field_submissions
+                (officer_id, state, lg, ward, ward_code, pu_code, location,
+                 reg_voters, total_accredited, valid_votes, rejected_votes,
+                 total_cast, lat, lon, timestamp, votes_json)
+                VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
+            """, (
+                body.get("officer_id", "DEMO"),
+                (body.get("state", "osun")).lower(),
+                body.get("lg", ""),
+                body.get("ward", ""),
+                body.get("ward_code", ""),
+                body.get("pu_code", ""),
+                body.get("location", ""),
+                body.get("reg_voters", 0),
+                body.get("total_accredited", 0),
+                body.get("valid_votes", 0),
+                body.get("rejected_votes", 0),
+                body.get("total_cast", 0),
+                body.get("lat", 0.0),
+                body.get("lon", 0.0),
+                now,
+                json.dumps(body.get("votes", {})),
+            ))
+            sid = cur.lastrowid
+        conn.commit()
+    return {"status": "ok", "message": "Submission created", "id": sid}
+
+
 @app.get("/dashboard", response_class=HTMLResponse)
 async def dashboard_page(request: Request):
     from fastapi.responses import HTMLResponse as _HR
