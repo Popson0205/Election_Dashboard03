@@ -4668,13 +4668,13 @@ async def clear_submissions(request: Request):
     with get_db() as conn:
         with conn.cursor() as cur:
             cur.execute("SELECT COUNT(*) FROM field_submissions")
-            count = cur.fetchone()[0]
+            row   = cur.fetchone()
+            count = row[0] if row else 0
             cur.execute("DELETE FROM field_submissions")
             try:
-                cur.execute("DELETE FROM sqlite_sequence WHERE name=\'field_submissions\'")
+                cur.execute("DELETE FROM sqlite_sequence WHERE name='field_submissions'")
             except Exception:
                 pass
-        conn.commit()
     return {"status": "ok", "message": f"Cleared {count} submissions", "deleted": count}
 
 
@@ -4715,9 +4715,7 @@ async def create_submission(request: Request):
                 now,
                 json.dumps(body.get("votes", {})),
             ))
-            sid = cur.lastrowid
-        conn.commit()
-    return {"status": "ok", "message": "Submission created", "id": sid}
+    return {"status": "ok", "message": "Submission created"}
 
 
 @app.get("/dashboard", response_class=HTMLResponse)
