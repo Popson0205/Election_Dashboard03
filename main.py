@@ -4892,11 +4892,12 @@ DASHBOARD_HTML = """
 
     /* Centre column */
     .centre-col{display:flex;flex-direction:column;gap:8px;min-height:0;overflow:hidden;}
-    #map{flex:0 0 42%;border-radius:12px;background:#0d1520;
-        border:1px solid rgba(245,166,35,0.2);min-height:200px;z-index:1;}
-    .leaflet-tile-pane{z-index:2;}
-    .leaflet-overlay-pane{z-index:3;}   /* heatmap goes here */
-    .leaflet-marker-pane{z-index:4;}    /* markers on top */
+    #map{height:45%;border-radius:12px;background:#111;
+        border:1px solid rgba(245,166,35,0.15);flex-shrink:0;z-index:1;}
+    .leaflet-heatmap-layer{opacity:0.55!important;}
+    .leaflet-tile-pane{z-index:2;opacity:1!important;}
+    .leaflet-overlay-pane{z-index:3;opacity:0.65!important;}
+    .leaflet-marker-pane{z-index:4;}
     .leaflet-tooltip-pane{z-index:5;}
     .leaflet-popup-pane{z-index:6;}
     .chart-row{display:grid;grid-template-columns:1fr 1fr;gap:8px;flex:1;min-height:120px;}
@@ -5208,25 +5209,9 @@ DASHBOARD_HTML = """
     // ── Map init ──
     function init() {
         // Locked to Osun State
-        map = L.map('map', {
-            zoomControl:true,
-            minZoom:9, maxZoom:16
-        }).setView([7.56, 4.52], 10);
-
-        // Base tile layer — dark with labels visible
-        L.tileLayer(
-            'https://{s}.basemaps.cartocdn.com/dark_matter_all/{z}/{x}/{y}{r}.png',
-            { attribution:'© OpenStreetMap © CartoDB', subdomains:'abcd', maxZoom:19 }
-        ).addTo(map);
-
-        // Fit map to Osun State bounds
-        const osunBounds = L.latLngBounds([[6.35, 3.85], [8.15, 5.15]]);
-        map.fitBounds(osunBounds, {padding:[10,10]});
-        // Subtle boundary outline
-        L.rectangle(osunBounds, {
-            color:'rgba(245,166,35,0.35)', weight:1.5,
-            fill:false, dashArray:'6,4', interactive:false
-        }).addTo(map);
+                map = L.map('map', {zoomControl:false}).setView([7.56, 4.52], 9);
+        L.tileLayer('https://{s}.basemaps.cartocdn.com/dark_all/{z}/{x}/{y}{r}.png')
+         .addTo(map);
 
         refreshData();
         loadInsights();
@@ -5359,36 +5344,35 @@ DASHBOARD_HTML = """
 
             // Map marker — coloured by winner
             if (d.latitude) {
-                const col = COLORS[winner] || '#F5A623';
+                const col = COLORS[winner] || '#ffc107';
                 const m = L.circleMarker([d.latitude, d.longitude], {
-                    radius:7, color:'#fff', fillColor:col,
-                    fillOpacity:0.9, weight:1.5
+                    radius:7, color:col, fillColor:col, fillOpacity:0.85, weight:2
                 }).addTo(map);
                 m.bindPopup(`<b>${d.pu_name}</b><br>
-                    ACCORD: <b style="color:#F5A623">${d.votes_party_ACCORD||0}</b><br>
-                    APC: ${d.votes_party_APC||0} &nbsp; ADC: ${d.votes_party_ADC||0}`);
+                    ACCORD: <b style="color:#F5A623">${d.votes_party_ACCORD||0}</b>
+                    &nbsp; APC: ${d.votes_party_APC||0}
+                    &nbsp; ADC: <span style="color:#34d399">${d.votes_party_ADC||0}</span>`);
                 markers.push(m);
                 heatPoints.push([d.latitude, d.longitude,
                     Math.min(1, (d.votes_party_ACCORD||0) / 400)]);
             }
         });
 
-        // Heatmap — add FIRST so markers render on top
+        // Heatmap — subtle overlay, tiles stay visible
         if (heatLayer) { map.removeLayer(heatLayer); heatLayer = null; }
         if (typeof L.heatLayer !== 'undefined' && heatPoints.length > 0) {
             heatLayer = L.heatLayer(heatPoints, {
-                radius:40, blur:25, maxZoom:13, minOpacity:0.5,
+                radius:35, blur:25, maxZoom:14, minOpacity:0.4,
                 gradient:{
-                    0.0: '#001a00',
-                    0.2: '#004d00',
-                    0.4: '#00aa44',
-                    0.6: '#ffaa00',
-                    0.8: '#ff6600',
-                    1.0: '#ffffff'
+                    0.0:'#00000000',
+                    0.3:'#006400',
+                    0.5:'#ffa500',
+                    0.7:'#ff4500',
+                    1.0:'#ffffff'
                 }
             }).addTo(map);
-            // Bring markers to front
-            markers.forEach(m => m.bringToFront && m.bringToFront());
+            // Bring markers on top of heatmap
+            markers.forEach(m => { try{ m.bringToFront(); }catch(e){} });
         }
 
         // ── Update ALL nav party spans ──
