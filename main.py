@@ -4145,7 +4145,7 @@ INCIDENT_DASHBOARD_HTML = """
 </div>
 
 <script>
-    let map, allIncidents = [], markers = [], heatLayer = null;
+    let map, allIncidents = [], markers = [];
 
     const SEV_COLOR = { Critical: '#ff0000', Medium: '#ffc107', Low: '#00cc44' };
     const TYPE_ICON = {
@@ -4290,7 +4290,7 @@ INCIDENT_DASHBOARD_HTML = """
     document.addEventListener('DOMContentLoaded', () => {
         initMap();
         loadIncidents();
-        setInterval(loadIncidents, 2000);
+        setInterval(loadIncidents, 30000);
     });
 </script>
 </body>
@@ -4731,314 +4731,490 @@ DASHBOARD_HTML = """
 <html lang="en">
 <head>
     <meta charset="UTF-8">
-    <title>Accord Situation Room — Osun 2026 LIVE</title>
+    <title>ACCORD — Situation Room · Osun 2026</title>
     <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/css/bootstrap.min.css" rel="stylesheet">
-    <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" />
-    <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/bootstrap-icons@1.11.1/font/bootstrap-icons.css">
+    <link href="https://cdn.jsdelivr.net/npm/bootstrap-icons@1.11.1/font/bootstrap-icons.css" rel="stylesheet">
+    <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css"/>
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;900&display=swap" rel="stylesheet">
     <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
     <script src="https://unpkg.com/leaflet.heat@0.2.0/dist/leaflet-heat.js"></script>
     <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
     <script src="https://cdn.jsdelivr.net/npm/chartjs-plugin-datalabels@2.0.0"></script>
-
     <style>
-        :root { --gold: #ffc107; --dark: #0a0a0a; --panel: #141414; --nav-h: 64px; }
-        *, *::before, *::after { box-sizing: border-box; }
-        html { height: 100%; }
-        body { background-color: var(--dark); color: #fff; font-family: 'Segoe UI', sans-serif; margin: 0; min-height: 100vh; overflow-y: auto; }
+    :root {
+        --gold:   #F5A623;
+        --apc:    #1A56DB;
+        --adc:    #00875A;
+        --pdp:    #E02424;
+        --bg:     #0D0F14;
+        --s1:     #161B26;
+        --s2:     #1E2433;
+        --s3:     #252D3D;
+        --border: rgba(255,255,255,0.07);
+        --text:   #F0F2F5;
+        --muted:  #6B7280;
+        --nav-h:  62px;
+        --kpi-h:  76px;
+    }
+    *,*::before,*::after{box-sizing:border-box;margin:0;padding:0;}
+    html,body{height:100%;background:var(--bg);color:var(--text);
+        font-family:'Inter','Segoe UI',sans-serif;overflow:hidden;}
 
-        /* ── Navbar ── */
-        .navbar-custom {
-            background: #000;
-            border-bottom: 2px solid var(--gold);
-            padding: 0 16px;
-            height: var(--nav-h);
-            display: flex;
-            align-items: center;
-            justify-content: space-between;
-            gap: 12px;
-            flex-shrink: 0;
-            position: relative;
-            z-index: 10;
-        }
-        .brand-title { color: var(--gold); font-weight: 900; font-size: 1rem; letter-spacing: 1px; white-space: nowrap; }
-        .brand-section { display: flex; flex-direction: column; justify-content: center; gap: 4px; min-width: 0; }
-        .brand-section .d-flex { flex-wrap: nowrap; }
+    /* ── NAVBAR ── */
+    .navbar-custom{
+        height:var(--nav-h);
+        background:linear-gradient(180deg,rgba(22,27,38,0.98) 0%,rgba(13,15,20,0.98) 100%);
+        border-bottom:1px solid rgba(245,166,35,0.25);
+        backdrop-filter:blur(16px);
+        display:flex;align-items:center;justify-content:space-between;
+        padding:0 20px;gap:12px;flex-shrink:0;position:relative;z-index:10;
+    }
+    .brand{display:flex;align-items:center;gap:10px;}
+    .live-dot{width:8px;height:8px;background:#22c55e;border-radius:50%;flex-shrink:0;
+        box-shadow:0 0 0 0 rgba(34,197,94,0.5);animation:pulse-dot 1.5s infinite;}
+    @keyframes pulse-dot{0%{box-shadow:0 0 0 0 rgba(34,197,94,0.5);}
+        70%{box-shadow:0 0 0 8px rgba(34,197,94,0);}
+        100%{box-shadow:0 0 0 0 rgba(34,197,94,0);}}
+    .nav-divider{width:1px;height:32px;background:var(--border);flex-shrink:0;}
+    .brand-name{font-weight:900;font-size:1rem;color:var(--gold);letter-spacing:1.5px;}
+    .brand-tag{font-size:0.55rem;color:var(--muted);letter-spacing:2px;text-transform:uppercase;margin-top:1px;}
 
-        .nav-kpi-group { display: flex; gap: 8px; flex-shrink: 0; }
-        .party-box {
-            background: #1a1a1a; border: 1px solid #333; border-radius: 8px;
-            padding: 4px 10px; display: flex; align-items: center; gap: 6px; min-width: 100px;
-        }
-        .party-box img { height: 26px; width: 26px; object-fit: contain; }
-        .party-info label { display: block; font-size: 0.58rem; color: #aaa; margin: 0; }
-        .party-info span { font-size: 0.95rem; font-weight: bold; color: #fff; }
+    .party-pills{display:flex;gap:8px;}
+    .pill{background:var(--s2);border:1px solid var(--border);border-radius:10px;
+        padding:5px 12px 5px 8px;display:flex;align-items:center;gap:8px;
+        min-width:115px;transition:border-color 0.2s;}
+    .pill-accord{border-bottom:2px solid var(--gold);}
+    .pill-apc   {border-bottom:2px solid var(--apc);}
+    .pill-adc   {border-bottom:2px solid var(--adc);}
+    .pill-logo{width:28px;height:28px;border-radius:6px;background:var(--s3);
+        display:flex;align-items:center;justify-content:center;overflow:hidden;flex-shrink:0;}
+    .pill-logo img{width:100%;height:100%;object-fit:contain;padding:2px;}
+    .pill-info label{display:block;font-size:0.52rem;color:var(--muted);
+        text-transform:uppercase;letter-spacing:0.5px;}
+    .pill-info span{font-size:1rem;font-weight:800;line-height:1.1;}
+    .pill-accord .pill-info span{color:var(--gold);}
+    .pill-apc    .pill-info span{color:#60a5fa;}
+    .pill-adc    .pill-info span{color:#34d399;}
 
-        .box-accord { border-top: 3px solid var(--gold); }
-        .box-apc    { border-top: 3px solid #0b3d91; }
-        .box-adc    { border-top: 3px solid #138808; }
+    .nav-right{display:flex;align-items:center;gap:12px;flex-shrink:0;}
+    .pu-badge{background:var(--s2);border:1px solid var(--border);border-radius:8px;
+        padding:5px 12px;font-size:0.7rem;color:var(--muted);
+        display:flex;align-items:center;gap:6px;}
+    .pu-badge b{color:var(--text);font-weight:700;}
+    .pu-badge i{color:#a855f7;font-size:0.75rem;}
+    .live-clock{font-size:0.88rem;font-weight:700;color:var(--gold);
+        font-variant-numeric:tabular-nums;letter-spacing:1px;}
+    .logout-btn{background:none;border:1px solid var(--border);color:var(--muted);
+        border-radius:8px;padding:5px 10px;font-size:0.7rem;cursor:pointer;
+        transition:all 0.2s;font-family:inherit;}
+    .logout-btn:hover{border-color:var(--pdp);color:var(--pdp);}
 
-        /* ── Main grid ── */
-        .main-content {
-            display: grid;
-            grid-template-columns: 300px 1fr 290px;
-            height: calc(100vh - var(--nav-h));
-            gap: 8px;
-            padding: 8px;
-            overflow: hidden;
-        }
+    /* ── KPI STRIP ── */
+    .kpi-strip{display:grid;grid-template-columns:repeat(6,1fr);
+        gap:8px;padding:8px 16px;flex-shrink:0;height:var(--kpi-h);}
+    .kpi{background:var(--s1);border:1px solid var(--border);border-radius:10px;
+        padding:9px 12px;position:relative;overflow:hidden;cursor:default;}
+    .kpi::before{content:'';position:absolute;top:0;left:0;right:0;height:2px;border-radius:2px 2px 0 0;}
+    .kpi-accord::before{background:linear-gradient(90deg,var(--gold),#ffd666);}
+    .kpi-margin::before{background:linear-gradient(90deg,var(--apc),#60a5fa);}
+    .kpi-pus::before   {background:linear-gradient(90deg,#7c3aed,#a855f7);}
+    .kpi-accred::before{background:linear-gradient(90deg,#0891b2,#22d3ee);}
+    .kpi-inc::before   {background:linear-gradient(90deg,var(--pdp),#f87171);}
+    .kpi-turn::before  {background:linear-gradient(90deg,var(--adc),#34d399);}
+    .kpi-icon{font-size:0.85rem;margin-bottom:3px;display:block;}
+    .kpi-accord .kpi-icon{color:var(--gold);}
+    .kpi-margin .kpi-icon{color:#60a5fa;}
+    .kpi-pus    .kpi-icon{color:#c084fc;}
+    .kpi-accred .kpi-icon{color:#22d3ee;}
+    .kpi-inc    .kpi-icon{color:#f87171;}
+    .kpi-turn   .kpi-icon{color:#34d399;}
+    .kpi-val{font-size:1.3rem;font-weight:900;display:block;line-height:1.1;
+        transition:all 0.4s;}
+    .kpi-label{font-size:0.55rem;color:var(--muted);text-transform:uppercase;
+        letter-spacing:0.5px;margin-top:2px;}
 
-        /* ── Side panels ── */
-        .side-panel {
-            background: var(--panel);
-            border-radius: 10px;
-            display: flex;
-            flex-direction: column;
-            overflow: hidden;
-            border: 1px solid #222;
-            min-height: 0;   /* critical: allows flex children to shrink */
-        }
-        .panel-header {
-            background: #1c1c1c;
-            padding: 8px 14px;
-            font-size: 0.72rem;
-            font-weight: bold;
-            color: var(--gold);
-            border-bottom: 1px solid #333;
-            text-transform: uppercase;
-            flex-shrink: 0;
-        }
+    /* ── MAIN GRID ── */
+    .main-content{
+        display:grid;grid-template-columns:290px 1fr 280px;
+        gap:8px;padding:0 8px 8px;
+        height:calc(100vh - var(--nav-h) - var(--kpi-h));overflow:hidden;
+    }
+    .side-panel{background:var(--s1);border:1px solid var(--border);border-radius:12px;
+        display:flex;flex-direction:column;overflow:hidden;min-height:0;}
+    .panel-header{padding:9px 14px;font-size:0.63rem;font-weight:700;
+        color:var(--muted);text-transform:uppercase;letter-spacing:1px;
+        border-bottom:1px solid var(--border);flex-shrink:0;
+        display:flex;align-items:center;justify-content:space-between;}
+    .ph-badge{background:var(--s2);border:1px solid var(--border);
+        border-radius:20px;padding:1px 8px;font-size:0.58rem;color:var(--gold);}
 
-        .margin-card {
-            background: #1e1e1e; border-radius: 8px; padding: 10px 14px;
-            text-align: center; margin: 8px; border: 1px solid #333; flex-shrink: 0;
-        }
-        .margin-val { font-size: 1.6rem; font-weight: 900; display: block; color: var(--gold); line-height: 1.2; }
+    /* Filter bar */
+    .filter-row{padding:7px;display:flex;gap:5px;border-bottom:1px solid var(--border);flex-shrink:0;}
+    .filter-row input,.filter-row select{flex:1;background:var(--s2);color:var(--text);
+        border:1px solid var(--border);border-radius:8px;font-size:0.68rem;
+        padding:5px 8px;font-family:inherit;outline:none;}
+    .filter-row input:focus,.filter-row select:focus{border-color:rgba(245,166,35,0.4);}
+    .filter-row input::placeholder{color:var(--muted);}
 
-        /* ── Centre column: map + charts ── */
-        .centre-col {
-            display: flex;
-            flex-direction: column;
-            gap: 8px;
-            min-height: 0;
-            overflow: hidden;
-        }
-        #map {
-            flex: 0 0 42%;
-            border-radius: 10px;
-            background: #111;
-            min-height: 180px;
-            z-index: 1;
-        }
-        .chart-row {
-            display: grid;
-            grid-template-columns: 1fr 1fr;
-            gap: 8px;
-            flex: 1;
-            min-height: 0;
-        }
-        .chart-box {
-            background: #1a1a1a;
-            border-radius: 10px;
-            padding: 12px;
-            border: 1px solid #222;
-            position: relative;
-            min-height: 0;
-            overflow: hidden;
-        }
-        .chart-box canvas { display: block; width: 100% !important; height: 100% !important; max-height: 100%; }
+    /* PU Feed */
+    .feed-container{flex:1;overflow-y:auto;padding:8px;min-height:0;}
+    .feed-container::-webkit-scrollbar{width:3px;}
+    .feed-container::-webkit-scrollbar-thumb{background:var(--s3);border-radius:3px;}
 
-        .feed-container { flex: 1; overflow-y: auto; padding: 8px; min-height: 0; }
-        .pu-card { background: #1e1e1e; border-radius: 8px; padding: 10px; margin-bottom: 6px; border-left: 4px solid var(--gold); cursor: pointer; flex-shrink: 0; }
-        .score-grid { display: grid; grid-template-columns: repeat(4, 1fr); gap: 4px; margin-top: 6px; font-size: 0.72rem; text-align: center; }
+    .pu-card{background:var(--s2);border:1px solid var(--border);border-radius:10px;
+        padding:9px 11px;margin-bottom:6px;cursor:pointer;
+        transition:background 0.15s,border-color 0.15s,transform 0.1s;}
+    .pu-card:hover{background:var(--s3);border-color:rgba(245,166,35,0.2);transform:translateX(2px);}
+    .pu-card-head{display:flex;align-items:center;justify-content:space-between;margin-bottom:3px;}
+    .pu-card-name{font-size:0.72rem;font-weight:600;flex:1;min-width:0;
+        overflow:hidden;text-overflow:ellipsis;white-space:nowrap;margin-right:6px;}
+    .winner-badge{font-size:0.52rem;font-weight:700;padding:2px 7px;border-radius:20px;flex-shrink:0;}
+    .wb-ACCORD{background:rgba(245,166,35,0.12);color:var(--gold);border:1px solid rgba(245,166,35,0.2);}
+    .wb-APC   {background:rgba(26,86,219,0.12);color:#60a5fa;border:1px solid rgba(26,86,219,0.2);}
+    .wb-ADC   {background:rgba(0,135,90,0.12);color:#34d399;border:1px solid rgba(0,135,90,0.2);}
+    .wb-PDP   {background:rgba(224,36,36,0.12);color:#f87171;border:1px solid rgba(224,36,36,0.2);}
+    .wb-other {background:rgba(107,114,128,0.12);color:var(--muted);border:1px solid var(--border);}
+    .pu-card-meta{font-size:0.6rem;color:var(--muted);margin-bottom:5px;}
+    .score-grid{display:grid;grid-template-columns:repeat(4,1fr);gap:3px;}
+    .score-item{background:var(--s1);border-radius:6px;padding:4px 5px;text-align:center;border:1px solid transparent;}
+    .si-ACCORD{border-color:rgba(245,166,35,0.15);}
+    .si-APC   {border-color:rgba(26,86,219,0.15);}
+    .si-ADC   {border-color:rgba(0,135,90,0.15);}
+    .score-label{font-size:0.5rem;color:var(--muted);display:block;margin-bottom:1px;}
+    .score-val{font-size:0.72rem;font-weight:700;}
+    .sv-ACCORD{color:var(--gold);}
+    .sv-APC   {color:#60a5fa;}
+    .sv-ADC   {color:#34d399;}
+    .sv-PDP   {color:#f87171;}
+    .sv-other {color:var(--muted);}
+    .ec8e-badge{font-size:0.55rem;font-weight:700;background:rgba(245,166,35,0.15);
+        color:var(--gold);padding:1px 5px;border-radius:4px;margin-left:4px;}
 
-        .ai-box { background: #000; color: #0f0; font-family: monospace; padding: 10px; font-size: 0.72rem; border: 1px solid #030; margin: 8px; overflow-y: auto; }
-        .ov-overlay{display:none !important;position:fixed;inset:0;z-index:99999;background:rgba(0,0,0,0.93);align-items:center;justify-content:center;}
-        .ov-overlay.active{display:flex !important;}
-        .ov-inner{background:#1a1a1a;border:2px solid #ffc107;border-radius:12px;padding:24px;width:95vw;max-height:92vh;overflow-y:auto;position:relative;}
-        .ov-close{position:absolute;top:10px;right:14px;background:none;border:none;color:#ffc107;font-size:1.6rem;cursor:pointer;line-height:1;z-index:10;}
-        .ov-close:hover{color:#fff;}
-        .ov-btn{background:rgba(255,193,7,0.15);border:1px solid #ffc107;color:#ffc107;border-radius:4px;padding:2px 7px;font-size:0.78rem;cursor:pointer;margin-left:6px;}
-        .ov-btn:hover{background:rgba(255,193,7,0.4);}
-        /* ── INSIGHT PANELS ── */
-        .insight-card { background:#1a1a1a; border:1px solid #2a2a2a; border-radius:8px; padding:8px; }
-        .insight-title { font-size:0.63rem; color:#ffc107; font-weight:bold; text-transform:uppercase; margin-bottom:5px; border-bottom:1px solid #2a2a2a; padding-bottom:3px; }
-        .threshold-bar { height:6px; background:#222; border-radius:4px; overflow:hidden; margin:3px 0; }
-        .threshold-fill { height:100%; background:linear-gradient(90deg,#ffc107,#00ff88); border-radius:4px; transition:width 0.5s; }
-        .swing-item { background:#1e1e1e; border-left:3px solid #ff4444; border-radius:4px; padding:5px 7px; margin-bottom:3px; font-size:0.68rem; }
-        .swing-item.lead { border-left-color:#ffc107; }
-        .flag-item { background:#1e1e1e; border-left:3px solid #ff6600; border-radius:4px; padding:5px 7px; margin-bottom:3px; font-size:0.68rem; }
-        .flag-item.high { border-left-color:#ff0000; }
-        .lga-row { display:flex; align-items:center; gap:5px; margin-bottom:4px; font-size:0.66rem; }
-        .lga-name { width:80px; color:#aaa; white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
-        .lga-bar-wrap { flex:1; height:5px; background:#222; border-radius:3px; overflow:hidden; }
-        .lga-bar-fill { height:100%; background:#ffc107; border-radius:3px; }
-        .lga-pct { width:32px; text-align:right; color:#ffc107; font-weight:bold; }
-        .timeline-dot { display:inline-block; width:7px; height:7px; border-radius:50%; background:#ffc107; margin-right:5px; }
-        .agent-row { display:flex; justify-content:space-between; align-items:center; padding:3px 0; border-bottom:1px solid #1a1a1a; font-size:0.68rem; }
-        .projection-val { font-size:1.3rem; font-weight:900; color:#00ff88; }
-        /* Right panel insight scroll area */
-        .insight-scroll { flex:1; overflow-y:auto; padding:8px; min-height:0; display:flex; flex-direction:column; gap:8px; }
+    /* Centre column */
+    .centre-col{display:flex;flex-direction:column;gap:8px;min-height:0;overflow:hidden;}
+    #map{flex:0 0 44%;border-radius:12px;background:#0d1520;min-height:180px;
+        border:1px solid var(--border);}
+    .chart-row{display:grid;grid-template-columns:1fr 1fr;gap:8px;flex:1;min-height:0;}
+    .chart-box{background:var(--s1);border:1px solid var(--border);border-radius:12px;
+        padding:11px;display:flex;flex-direction:column;min-height:0;overflow:hidden;
+        position:relative;}
+    .chart-title{font-size:0.6rem;font-weight:700;color:var(--muted);
+        text-transform:uppercase;letter-spacing:1px;margin-bottom:8px;flex-shrink:0;}
+    .chart-box canvas{display:block;width:100%!important;height:100%!important;max-height:100%;}
 
+    /* Right panel */
+    .margin-card{margin:10px;background:var(--s2);border:1px solid rgba(245,166,35,0.2);
+        border-radius:10px;padding:12px;text-align:center;flex-shrink:0;}
+    .margin-val{font-size:1.8rem;font-weight:900;color:var(--gold);display:block;line-height:1;}
+    .margin-label{font-size:0.58rem;color:var(--muted);margin-top:3px;}
+    .margin-rival{font-size:0.63rem;color:#34d399;margin-top:4px;
+        display:flex;align-items:center;justify-content:center;gap:3px;}
+
+    .proj-card{margin:0 10px 8px;background:var(--s2);
+        border:1px solid rgba(0,135,90,0.2);border-radius:10px;
+        padding:9px 12px;flex-shrink:0;display:flex;align-items:center;justify-content:space-between;}
+    .proj-val{font-size:1.25rem;font-weight:900;color:#34d399;}
+    .proj-label{font-size:0.57rem;color:var(--muted);}
+
+    .lga-list{flex:1;overflow-y:auto;padding:8px;min-height:0;}
+    .lga-list::-webkit-scrollbar{width:3px;}
+    .lga-list::-webkit-scrollbar-thumb{background:var(--s3);}
+    .lga-row{display:flex;align-items:center;gap:7px;margin-bottom:6px;}
+    .lga-name{font-size:0.64rem;width:80px;flex-shrink:0;color:var(--text);
+        white-space:nowrap;overflow:hidden;text-overflow:ellipsis;}
+    .lga-bar-bg{flex:1;height:5px;background:var(--s3);border-radius:3px;overflow:hidden;}
+    .lga-bar-fill{height:100%;border-radius:3px;
+        background:linear-gradient(90deg,var(--adc),var(--gold));
+        transition:width 0.6s ease;}
+    .lga-pct{font-size:0.58rem;color:var(--muted);width:26px;text-align:right;flex-shrink:0;}
+
+    .ai-box{margin:0 10px 10px;background:#000;border:1px solid rgba(34,197,94,0.15);
+        border-radius:10px;padding:10px;font-family:'Courier New',monospace;
+        font-size:0.62rem;color:#22c55e;flex:1;overflow-y:auto;min-height:0;
+        line-height:1.7;white-space:pre-wrap;}
+
+    /* EC8E viewer */
+    #ec8eViewerPanel{background:var(--s2);border-top:1px solid var(--border);
+        padding:8px;flex-shrink:0;display:none;}
+    #ec8eViewerPanel.active{display:block;}
+
+    /* Overlays */
+    .ov-overlay{display:none;position:fixed;inset:0;background:rgba(0,0,0,0.85);
+        z-index:1000;align-items:center;justify-content:center;}
+    .ov-overlay.active{display:flex;}
+    .ov-inner{background:var(--s1);border:1px solid var(--border);border-radius:16px;
+        padding:24px;max-width:600px;width:90%;max-height:80vh;overflow-y:auto;position:relative;}
+    .ov-close{position:absolute;top:12px;right:14px;background:none;border:none;
+        color:var(--muted);font-size:1.2rem;cursor:pointer;}
+    .ov-close:hover{color:var(--text);}
     </style>
 </head>
 <body>
 
+<!-- NAVBAR -->
 <nav class="navbar-custom">
-    <div class="brand-section">
-        <div class="brand-title">ACCORD SITUATION ROOM — OSUN 2026</div>
-        <div class="d-flex gap-2 mt-1">
-            <!-- BUG FIX #6: filters use consistent lowercase state value -->
-            <select id="fState" class="form-select form-select-sm bg-dark text-white border-secondary" style="width:105px;" onchange="updateLGAs()"><option value="">STATE</option></select>
-            <select id="fLGA" class="form-select form-select-sm bg-dark text-white border-secondary" style="width:105px;" onchange="updateWards()"><option value="">LGA</option></select>
-            <select id="fWard" class="form-select form-select-sm bg-dark text-white border-secondary" style="width:105px;" onchange="applyFilters()"><option value="">WARD</option></select>
+    <div class="brand">
+        <div class="live-dot"></div>
+        <div class="nav-divider"></div>
+        <div>
+            <div class="brand-name">ACCORD · OSUN 2026</div>
+            <div class="brand-tag">Situation Room — Live Command</div>
         </div>
     </div>
 
-    <div class="nav-kpi-group">
-        <div class="party-box box-accord"><img src="/logos/ACCORD.png" onerror="this.style.display='none'"><div class="party-info"><label>ACCORD</label><span id="nav-ACCORD">0</span></div></div>
-        <div class="party-box box-apc"><img src="/logos/APC.png" onerror="this.style.display='none'"><div class="party-info"><label>APC</label><span id="nav-APC">0</span></div></div>
-        <div class="party-box box-adc"><img src="/logos/ADC.png" onerror="this.style.display='none'"><div class="party-info"><label>ADC</label><span id="nav-ADC">0</span></div></div>
-        <!-- Hidden spans for all 14 parties so overlay charts can read them -->
-        <span id="nav-AA" style="display:none">0</span>
-        <span id="nav-AAC" style="display:none">0</span>
-        <span id="nav-ADP" style="display:none">0</span>
-        <span id="nav-APGA" style="display:none">0</span>
-        <span id="nav-APM" style="display:none">0</span>
-        <span id="nav-APP" style="display:none">0</span>
-        <span id="nav-BP" style="display:none">0</span>
+    <div class="party-pills">
+        <div class="pill pill-accord">
+            <div class="pill-logo">
+                <img src="/static/logos/ACCORD.png" alt="ACCORD"
+                     onerror="this.style.display='none'">
+            </div>
+            <div class="pill-info">
+                <label>ACCORD</label>
+                <span id="nav-ACCORD">0</span>
+            </div>
+        </div>
+        <div class="pill pill-apc">
+            <div class="pill-logo">
+                <img src="/static/logos/APC.png" alt="APC"
+                     onerror="this.style.display='none'">
+            </div>
+            <div class="pill-info">
+                <label>APC</label>
+                <span id="nav-APC">0</span>
+            </div>
+        </div>
+        <div class="pill pill-adc">
+            <div class="pill-logo">
+                <img src="/static/logos/ADC.png" alt="ADC"
+                     onerror="this.style.display='none'">
+            </div>
+            <div class="pill-info">
+                <label>ADC</label>
+                <span id="nav-ADC">0</span>
+            </div>
+        </div>
+        <!-- Hidden spans for other parties (needed by existing JS) -->
+        <span id="nav-PDP" style="display:none">0</span>
+        <span id="nav-LP"  style="display:none">0</span>
         <span id="nav-NNPP" style="display:none">0</span>
-        <span id="nav-PRP" style="display:none">0</span>
-        <span id="nav-YPP" style="display:none">0</span>
-        <span id="nav-ZLP" style="display:none">0</span>
+        <span id="nav-APGA" style="display:none">0</span>
+        <span id="nav-PRP"  style="display:none">0</span>
+        <span id="nav-SDP"  style="display:none">0</span>
+        <span id="nav-AA"   style="display:none">0</span>
+        <span id="nav-AAC"  style="display:none">0</span>
+        <span id="nav-ADP"  style="display:none">0</span>
+        <span id="nav-APM"  style="display:none">0</span>
+        <span id="nav-APP"  style="display:none">0</span>
+        <span id="nav-BP"   style="display:none">0</span>
+        <span id="nav-YPP"  style="display:none">0</span>
+        <span id="nav-ZLP"  style="display:none">0</span>
     </div>
 
-    <div>
-        <a href="/export/csv" class="btn btn-sm btn-outline-warning py-1 px-3" style="font-size: 11px;">
-            <i class="bi bi-download"></i> EXPORT CSV
-        </a>
-        <button onclick="logoutDash()" class="btn btn-sm btn-outline-danger py-1 px-3" style="font-size:11px;">
-            🔒 LOCK
+    <div class="nav-right">
+        <div class="pu-badge">
+            <i class="bi bi-geo-alt-fill"></i>
+            <b id="pu-count">0</b>&nbsp;PUs Reported
+        </div>
+        <div class="live-clock" id="liveClock">--:--:--</div>
+        <button class="logout-btn" onclick="logoutDash()">
+            <i class="bi bi-box-arrow-right"></i> Logout
         </button>
     </div>
 </nav>
 
+<!-- KPI STRIP -->
+<div class="kpi-strip">
+    <div class="kpi kpi-accord">
+        <i class="bi bi-check-circle-fill kpi-icon"></i>
+        <span class="kpi-val" id="kpi-accord-val">0</span>
+        <span class="kpi-label">ACCORD Total</span>
+    </div>
+    <div class="kpi kpi-margin">
+        <i class="bi bi-graph-up-arrow kpi-icon"></i>
+        <span class="kpi-val" id="kpi-margin-val">0</span>
+        <span class="kpi-label">Lead Margin</span>
+    </div>
+    <div class="kpi kpi-pus">
+        <i class="bi bi-geo-alt-fill kpi-icon"></i>
+        <span class="kpi-val" id="kpi-pus-val">0</span>
+        <span class="kpi-label">PUs Reported</span>
+    </div>
+    <div class="kpi kpi-accred">
+        <i class="bi bi-people-fill kpi-icon"></i>
+        <span class="kpi-val" id="kpi-accred-val">0</span>
+        <span class="kpi-label">Accredited</span>
+    </div>
+    <div class="kpi kpi-inc">
+        <i class="bi bi-exclamation-triangle-fill kpi-icon"></i>
+        <span class="kpi-val" id="kpi-inc-val">0</span>
+        <span class="kpi-label">Incidents</span>
+    </div>
+    <div class="kpi kpi-turn">
+        <i class="bi bi-percent kpi-icon"></i>
+        <span class="kpi-val" id="kpi-turn-val">0%</span>
+        <span class="kpi-label">Avg Turnout</span>
+    </div>
+</div>
+
+<!-- MAIN GRID -->
 <div class="main-content">
+
+    <!-- LEFT: PU FEED -->
     <div class="side-panel">
-        <div class="panel-header">LIVE PU FEED <span id="pu-count" class="badge bg-warning text-dark ms-2">0</span></div>
-        <div class="p-2"><input type="text" id="puSearch" class="form-control form-control-sm bg-dark text-white border-secondary" placeholder="Search PU..." oninput="renderFeed()"></div>
+        <div class="panel-header">
+            PU Results Feed
+            <span class="ph-badge" id="feed-count">0</span>
+        </div>
+        <div class="filter-row">
+            <input type="text" id="puSearch" placeholder="🔍  Search PU..." oninput="applyFilters()">
+        </div>
+        <div class="filter-row" style="border-top:none;padding-top:0;">
+            <select id="fState" onchange="loadFilters()">
+                <option value="">All States</option>
+                <option value="osun" selected>Osun</option>
+            </select>
+            <select id="fLGA" onchange="updateWards()">
+                <option value="">All LGAs</option>
+            </select>
+            <select id="fWard" onchange="applyFilters()">
+                <option value="">All Wards</option>
+            </select>
+        </div>
         <div class="feed-container" id="feedList"></div>
+        <div id="ec8eViewerPanel">
+            <div id="ec8eContent" style="font-size:0.7rem;color:var(--muted);">
+                Click a PU card to view EC8E form image
+            </div>
+        </div>
     </div>
 
+    <!-- CENTRE: MAP + CHARTS -->
     <div class="centre-col">
         <div id="map"></div>
         <div class="chart-row">
-            <div class="chart-box"><canvas id="barChart"></canvas></div>
-            <div class="chart-box"><canvas id="pieChart"></canvas></div>
+            <div class="chart-box">
+                <div class="chart-title">Vote Share — Big 3</div>
+                <canvas id="pieChart"></canvas>
+            </div>
+            <div class="chart-box">
+                <div class="chart-title">ACCORD vs Rivals</div>
+                <canvas id="barChart"></canvas>
+            </div>
         </div>
     </div>
 
+    <!-- RIGHT: ANALYTICS -->
     <div class="side-panel">
-        <div class="panel-header" style="display:flex;align-items:center;justify-content:space-between;">
-            <span>VOTE MARGIN ANALYSIS</span>
-            <button class="ov-btn" onclick="openOverlay('ov-margin')" title="Maximize">⛶</button>
-        </div>
-        <div class="margin-card" style="position:relative;">
-            <small class="text-secondary">ACCORD LEAD/LAG</small>
-            <span id="marginVal" class="margin-val">0</span>
-            <small id="marginLead" class="fw-bold">AWAITING DATA</small>
-        </div>
+        <div class="panel-header">Analytics & Projection</div>
 
-        <div class="panel-header" style="display:flex;align-items:center;justify-content:space-between;">
-            <span>AI ANALYTICS LOG</span>
-            <button class="ov-btn" onclick="openOverlay('ov-ai')" title="Maximize">⛶</button>
-        </div>
-        <div class="ai-box" id="ai_box" style="flex:1;min-height:0;max-height:160px;overflow-y:auto;">System ready. Waiting for live polling unit synchronization...</div>
-
-        <div class="panel-header" style="display:flex;align-items:center;justify-content:space-between;flex-shrink:0;">
-            <span>📷 EC 8E FORM VIEWER</span>
-            <button class="ov-btn" onclick="openOverlay('ov-ec8e')" title="Maximize">⛶</button>
-        </div>
-        <div id="ec8eViewerPanel" style="background:#111;padding:8px;margin:0;border-bottom:1px solid #222;text-align:center;flex:1;min-height:60px;max-height:180px;overflow-y:auto;flex-shrink:0;">
-            <div style="color:#444;font-size:0.72rem;font-style:italic;padding:12px 0;">
-                Click any polling unit to view its EC 8E form
+        <div class="margin-card">
+            <span class="margin-val" id="marginVal">0</span>
+            <div class="margin-label" id="marginLead">ACCORD LEAD</div>
+            <div class="margin-rival">
+                <i class="bi bi-arrow-up-short"></i>
+                <span id="projectionNote">Awaiting data...</span>
             </div>
         </div>
 
-        <div class="p-2 border-top border-secondary" style="flex-shrink:0;">
-            <button class="btn btn-warning btn-sm w-100 fw-bold" onclick="refreshData()">REFRESH ALL DATA</button>
+        <div class="proj-card">
+            <div>
+                <div class="proj-val" id="projectionVal">—</div>
+                <div class="proj-label">Projected ACCORD Total</div>
+            </div>
+            <i class="bi bi-lightning-fill" style="color:var(--gold);font-size:1.1rem;"></i>
         </div>
+
+        <div class="panel-header" style="margin-top:2px;">
+            LGA Completion
+            <span class="ph-badge" id="lga-count">0 LGAs</span>
+        </div>
+        <div class="lga-list" id="lgaCompletionList"></div>
+
+        <div class="panel-header">AI Insight</div>
+        <div class="ai-box" id="ai_box">Awaiting data...</div>
+    </div>
+</div>
+
+<!-- OVERLAYS (kept from original) -->
+<div id="ov-lga" class="ov-overlay">
+    <div class="ov-inner">
+        <button class="ov-close" onclick="closeOverlay('ov-lga')">✕</button>
+        <h5 style="color:var(--gold);margin-bottom:12px;">LGA COMPLETION</h5>
+        <div id="ov-lga-inner" style="max-height:60vh;overflow-y:auto;"></div>
+    </div>
+</div>
+<div id="ov-swing" class="ov-overlay">
+    <div class="ov-inner">
+        <button class="ov-close" onclick="closeOverlay('ov-swing')">✕</button>
+        <h5 style="color:#ff4444;margin-bottom:12px;">SWING POLLING UNITS</h5>
+        <div id="ov-swing-inner" style="max-height:60vh;overflow-y:auto;"></div>
+    </div>
+</div>
+<div id="ov-flags" class="ov-overlay">
+    <div class="ov-inner">
+        <button class="ov-close" onclick="closeOverlay('ov-flags')">✕</button>
+        <h5 style="color:#ff6600;margin-bottom:12px;">RESULT INTEGRITY FLAGS</h5>
+        <div id="ov-flags-inner" style="max-height:60vh;overflow-y:auto;"></div>
+    </div>
+</div>
+<div id="ov-proj" class="ov-overlay">
+    <div class="ov-inner">
+        <button class="ov-close" onclick="closeOverlay('ov-proj')">✕</button>
+        <h5 style="color:#00ff88;margin-bottom:12px;">PROJECTED TALLY + AGENTS</h5>
+        <div style="display:grid;grid-template-columns:1fr 1fr;gap:20px;">
+            <div>
+                <div style="font-size:0.75rem;color:#aaa;margin-bottom:8px;">PROJECTED ACCORD TOTAL</div>
+                <div id="ov-projVal" style="font-size:3rem;font-weight:900;color:#00ff88;">--</div>
+                <div id="ov-projNote" style="font-size:0.75rem;color:#555;margin-top:4px;"></div>
+            </div>
+            <div>
+                <div style="font-size:0.75rem;color:#ffc107;font-weight:bold;margin-bottom:8px;">AGENT LEADERBOARD</div>
+                <div id="ov-agentList"></div>
+            </div>
+        </div>
+    </div>
+</div>
+<div id="ov-timeline" class="ov-overlay">
+    <div class="ov-inner">
+        <button class="ov-close" onclick="closeOverlay('ov-timeline')">✕</button>
+        <h5 style="color:var(--gold);margin-bottom:12px;">COLLATION TIMELINE</h5>
+        <div style="position:relative;height:320px;"><canvas id="ov-timelineChart"></canvas></div>
+        <div id="ov-timeline-list" style="max-height:200px;overflow-y:auto;margin-top:12px;"></div>
     </div>
 </div>
 
 <script>
-    let map, globalData = [], filterLookup = [], markers = [], pie, bar;
-    Chart.register(ChartDataLabels);
-
-    // BUG FIX #4: Store full 14-party totals globally so overlays can access them
-    let globalTotals = {};
-
     const PARTIES = ['ACCORD','AA','AAC','ADC','ADP','APGA','APC','APM','APP','BP','NNPP','PRP','YPP','ZLP'];
-    const PARTY_COLORS = ['#ffc107','#6c757d','#17a2b8','#138808','#fd7e14','#6f42c1','#0b3d91','#20c997','#e83e8c','#dc3545','#0dcaf0','#198754','#ffc0cb','#ff6b35'];
+    const BIG3    = ['ACCORD','APC','ADC'];
+    const COLORS  = { ACCORD:'#F5A623', APC:'#1A56DB', ADC:'#00875A', PDP:'#E02424' };
 
+    let map, markers = [], heatLayer = null, allIncidents = [];
+    let globalData = [], globalTotals = {};
+    let pie = null, bar = null;
+
+    // ── Live clock ──
+    function tickClock() {
+        const n = new Date();
+        const el = document.getElementById('liveClock');
+        if (el) el.textContent = n.toLocaleTimeString('en-NG',
+            {hour:'2-digit',minute:'2-digit',second:'2-digit'});
+    }
+    setInterval(tickClock, 1000); tickClock();
+
+    // ── Map init ──
     function init() {
-        map = L.map('map', { zoomControl: false }).setView([7.56, 4.52], 9);
-        L.tileLayer('https://{s}.basemaps.cartocdn.com/dark_all/{z}/{x}/{y}{r}.png').addTo(map);
-        loadFilters();
+        map = L.map('map', {zoomControl:true}).setView([7.56, 4.52], 9);
+        L.tileLayer('https://{s}.basemaps.cartocdn.com/dark_matter/{z}/{x}/{y}{r}.png',
+            {attribution:'© CartoDB'}).addTo(map);
         refreshData();
-        setInterval(refreshData, 2000);
         loadInsights();
-        setInterval(loadInsights, 2000);
     }
 
-    async function loadFilters() {
-        try {
-            const res = await fetch(window.location.origin + '/api/dashboard_filters', { credentials: 'include' });
-            filterLookup = await res.json();
-            // Normalise all fields to lowercase for consistent comparison
-            filterLookup = filterLookup.map(x => ({
-                state: (x.state||'').toLowerCase(),
-                lg:    (x.lg||'').toLowerCase(),
-                ward:  (x.ward||'').toLowerCase()
-            }));
-            const states = [...new Set(filterLookup.map(x => x.state))].sort();
-            const sEl = document.getElementById('fState');
-            states.forEach(s => sEl.add(new Option(s.toUpperCase(), s)));
-            // Auto-select OSUN — it's the only state in this app
-            if (states.length === 1) {
-                sEl.value = states[0];
-                updateLGAs();
-            } else {
-                const osun = states.find(s => s === 'osun');
-                if (osun) { sEl.value = osun; updateLGAs(); }
-            }
-        } catch(e) { console.error("Filter load error", e); }
-    }
-
-    function updateLGAs() {
-        const s = document.getElementById('fState').value.toLowerCase();
-        const lEl = document.getElementById('fLGA');
-        lEl.innerHTML = '<option value="">— All LGAs —</option>';
-        const lgas = [...new Set(filterLookup.filter(x => x.state === s).map(x => x.lg))].sort();
-        lgas.forEach(l => lEl.add(new Option(l.toUpperCase(), l)));
-        document.getElementById('fWard').innerHTML = '<option value="">— All Wards —</option>';
-        applyFilters();
-    }
-
-    function updateWards() {
-        const s = document.getElementById('fState').value.toLowerCase();
-        const l = document.getElementById('fLGA').value.toLowerCase();
-        const wEl = document.getElementById('fWard');
-        wEl.innerHTML = '<option value="">— All Wards —</option>';
-        const wards = [...new Set(filterLookup.filter(x => x.state === s && x.lg === l).map(x => x.ward))].sort();
-        wards.forEach(w => wEl.add(new Option(w.toUpperCase(), w)));
-        applyFilters();
-    }
-
+    // ── Data refresh ──
     async function refreshData() {
         try {
-            const res = await fetch(window.location.origin + '/submissions', { credentials: 'include' });
+            const res = await fetch(window.location.origin + '/submissions', {credentials:'include'});
             globalData = await res.json();
-            // Normalise all string fields to lowercase for consistent filtering
             globalData = globalData.map(x => ({
                 ...x,
                 state: (x.state||'').toLowerCase(),
@@ -5046,7 +5222,44 @@ DASHBOARD_HTML = """
                 ward:  (x.ward||'').toLowerCase()
             }));
             applyFilters();
-        } catch(e) { console.error("Data refresh error", e); }
+        } catch(e) { console.error('Data refresh error', e); }
+    }
+
+    // ── Filters ──
+    async function loadFilters() {
+        try {
+            const s = document.getElementById('fState').value;
+            if (!s) return;
+            const res = await fetch('/api/lgas/' + s, {credentials:'include'});
+            const lgas = await res.json();
+            const sel = document.getElementById('fLGA');
+            sel.innerHTML = '<option value="">All LGAs</option>';
+            lgas.forEach(l => {
+                const o = document.createElement('option');
+                o.value = l; o.textContent = l.charAt(0).toUpperCase() + l.slice(1);
+                sel.appendChild(o);
+            });
+            applyFilters();
+        } catch(e) {}
+    }
+
+    async function updateWards() {
+        const s = document.getElementById('fState').value;
+        const l = document.getElementById('fLGA').value;
+        const sel = document.getElementById('fWard');
+        sel.innerHTML = '<option value="">All Wards</option>';
+        if (s && l) {
+            try {
+                const res = await fetch(`/api/wards/${s}/${l}`, {credentials:'include'});
+                const wards = await res.json();
+                wards.forEach(w => {
+                    const o = document.createElement('option');
+                    o.value = w.name || w; o.textContent = w.name || w;
+                    sel.appendChild(o);
+                });
+            } catch(e) {}
+        }
+        applyFilters();
     }
 
     function applyFilters() {
@@ -5060,632 +5273,280 @@ DASHBOARD_HTML = """
         updateUI(filtered);
     }
 
+    // ── Main UI update — wires ALL metrics ──
     function updateUI(data) {
-        let t = {};
+        const t = {};
         PARTIES.forEach(p => t[p] = 0);
-        const list = document.getElementById('feedList'); list.innerHTML = "";
+        let totalAccred = 0, totalReg = 0;
+
+        const list = document.getElementById('feedList');
+        list.innerHTML = '';
         markers.forEach(m => map.removeLayer(m));
         markers = [];
+        const heatPoints = [];
 
         const searchTerm = (document.getElementById('puSearch').value || '').toLowerCase();
 
-        const heatPoints = [];
         data.forEach(d => {
             PARTIES.forEach(p => { t[p] += (d['votes_party_'+p] || 0); });
+            totalAccred += (d.total_accredited || 0);
+            totalReg    += (d.reg_voters       || 0);
 
-            if (searchTerm && !d.pu_name.toLowerCase().includes(searchTerm)) return;
+            if (searchTerm && !(d.pu_name||'').toLowerCase().includes(searchTerm)) return;
+
+            // Determine winner
+            const partyVotes = BIG3.map(p => ({p, v: d['votes_party_'+p]||0}));
+            partyVotes.sort((a,b) => b.v - a.v);
+            const winner = partyVotes[0].p;
+            const wbClass = 'wb-' + (COLORS[winner] ? winner : 'other');
+
+            const ec8eBadge = d.ec8e_image
+                ? `<span class="ec8e-badge">📷 EC8E</span>` : '';
 
             const card = document.createElement('div');
             card.className = 'pu-card';
-            const ec8eBadge = d.ec8e_image
-                ? `<span style="float:right;background:#ffc107;color:#000;font-size:0.6rem;font-weight:bold;padding:2px 6px;border-radius:10px;margin-left:6px;">📷 EC8E</span>`
-                : `<span style="float:right;font-size:0.6rem;color:#555;padding:2px 6px;">no image</span>`;
-            card.innerHTML = `<h6 style="font-size:0.8rem;margin:0 0 4px">${d.pu_name}${ec8eBadge}</h6>
-                <div style="font-size:0.72rem;color:#aaa">${d.lga} &rsaquo; ${d.ward}</div>
+            card.innerHTML = `
+                <div class="pu-card-head">
+                    <span class="pu-card-name">${d.pu_name||'—'}${ec8eBadge}</span>
+                    <span class="winner-badge ${wbClass}">${winner} ✓</span>
+                </div>
+                <div class="pu-card-meta">${(d.lga||'').toUpperCase()} · ${d.ward||''}</div>
                 <div class="score-grid">
-                    <div>ACCORD: <b style="color:#ffc107">${d.votes_party_ACCORD||0}</b></div>
-                    <div>APC: <b style="color:#0d6efd">${d.votes_party_APC||0}</b></div>
-                    <div>ADC: <b style="color:#17a2b8">${d.votes_party_ADC||0}</b></div>
-                    <div>PDP: ${d.votes_party_PDP||0}</div>
+                    <div class="score-item si-ACCORD">
+                        <span class="score-label">ACCORD</span>
+                        <span class="score-val sv-ACCORD">${(d.votes_party_ACCORD||0).toLocaleString()}</span>
+                    </div>
+                    <div class="score-item si-APC">
+                        <span class="score-label">APC</span>
+                        <span class="score-val sv-APC">${(d.votes_party_APC||0).toLocaleString()}</span>
+                    </div>
+                    <div class="score-item si-ADC">
+                        <span class="score-label">ADC</span>
+                        <span class="score-val sv-ADC">${(d.votes_party_ADC||0).toLocaleString()}</span>
+                    </div>
+                    <div class="score-item">
+                        <span class="score-label">PDP</span>
+                        <span class="score-val sv-PDP">${(d.votes_party_PDP||0).toLocaleString()}</span>
+                    </div>
                 </div>`;
             card.onclick = () => {
                 if(d.latitude) map.setView([d.latitude, d.longitude], 14);
                 showEc8e(d.ec8e_image, d.pu_name);
-                // Scroll EC8E panel into view
-                const panel = document.getElementById('ec8eViewerPanel');
-                if(panel) panel.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
             };
             list.appendChild(card);
 
-            if(d.latitude) {
-                const m = L.circleMarker([d.latitude, d.longitude], { radius: 6, color: '#ffc107', fillOpacity: 0.8 }).addTo(map);
-                m.bindPopup(`<b>${d.pu_name}</b><br>ACCORD: ${d.votes_party_ACCORD||0}<br>ADC: ${d.votes_party_ADC||0}`);
+            // Map marker — coloured by winner
+            if (d.latitude) {
+                const col = COLORS[winner] || '#F5A623';
+                const m = L.circleMarker([d.latitude, d.longitude], {
+                    radius:6, color:col, fillColor:col, fillOpacity:0.85, weight:1.5
+                }).addTo(map);
+                m.bindPopup(`<b>${d.pu_name}</b><br>
+                    ACCORD: <b style="color:#F5A623">${d.votes_party_ACCORD||0}</b><br>
+                    APC: ${d.votes_party_APC||0} &nbsp; ADC: ${d.votes_party_ADC||0}`);
                 markers.push(m);
-                heatPoints.push([d.latitude, d.longitude, Math.min(1, (d.votes_party_ACCORD||0) / 400)]);
+                heatPoints.push([d.latitude, d.longitude,
+                    Math.min(1, (d.votes_party_ACCORD||0) / 400)]);
             }
         });
 
-        // Heatmap layer
+        // Heatmap
         if (heatLayer) { map.removeLayer(heatLayer); heatLayer = null; }
         if (typeof L.heatLayer !== 'undefined' && heatPoints.length > 0) {
             heatLayer = L.heatLayer(heatPoints, {
-                radius: 35, blur: 25, maxZoom: 12,
-                gradient: { 0.0: '#003300', 0.4: '#008751', 0.7: '#ffc107', 1.0: '#ffffff' }
+                radius:35, blur:25, maxZoom:12,
+                gradient:{0.0:'#003300', 0.4:'#00875A', 0.7:'#F5A623', 1.0:'#ffffff'}
             }).addTo(map);
         }
 
-        // BUG FIX #4: Update ALL 14 nav spans (hidden ones too) so overlays get correct data
+        // ── Update ALL nav party spans ──
         PARTIES.forEach(p => {
             const el = document.getElementById('nav-'+p);
-            if(el) el.innerText = t[p].toLocaleString();
+            if(el) el.innerText = (t[p]||0).toLocaleString();
         });
 
-        // Store globally for overlay access
-        globalTotals = { ...t };
-        updateProjection(globalTotals, data.length);
-
+        // ── Update KPI cards ──
         const rivals = {};
         PARTIES.filter(p => p !== 'ACCORD').forEach(p => rivals[p] = t[p]);
-        const topRival = Object.keys(rivals).reduce((a, b) => rivals[a] > rivals[b] ? a : b);
-        const margin = t.ACCORD - rivals[topRival];
+        const topRival = Object.keys(rivals).reduce((a,b) => rivals[a]>rivals[b]?a:b, 'APC');
+        const margin   = t.ACCORD - rivals[topRival];
+        const turnout  = totalReg > 0 ? ((totalAccred/totalReg)*100).toFixed(1) : '0.0';
 
-        const mValEl = document.getElementById('marginVal');
-        if(mValEl) {
-            mValEl.innerText = Math.abs(margin).toLocaleString();
-            mValEl.style.color = margin >= 0 ? "#00ff00" : "#ff4444";
-        }
-        const mLeadEl = document.getElementById('marginLead');
-        if(mLeadEl) mLeadEl.innerText = margin >= 0 ? `LEAD OVER ${topRival}` : `TRAILING ${topRival}`;
+        const set = (id, val) => { const el=document.getElementById(id); if(el) el.innerText=val; };
+        set('kpi-accord-val', (t.ACCORD||0).toLocaleString());
+        set('kpi-margin-val', (margin>=0?'+':'')+margin.toLocaleString());
+        set('kpi-pus-val',    data.length.toLocaleString());
+        set('kpi-accred-val', totalAccred.toLocaleString());
+        set('kpi-turn-val',   turnout+'%');
+        set('pu-count',       data.length.toLocaleString());
+        set('feed-count',     data.length.toLocaleString());
 
-        const pCountEl = document.getElementById('pu-count');
-        if(pCountEl) pCountEl.innerText = data.length;
+        // Margin card
+        set('marginVal',  Math.abs(margin).toLocaleString());
+        set('marginLead', margin>=0 ? `ACCORD LEAD OVER ${topRival}` : `TRAILING ${topRival}`);
+        const mEl = document.getElementById('marginVal');
+        if(mEl) mEl.style.color = margin>=0 ? '#F5A623' : '#f87171';
 
+        globalTotals = {...t};
+        updateProjection(globalTotals, data.length);
         updateCharts(t);
         runAI(t);
+        loadInsights();
     }
 
+    // ── Charts ──
     function updateCharts(t) {
-        const labels = ['ACCORD', 'APC', 'ADC'];
-        const vals = labels.map(p => t[p] || 0);
-        const colors = ['#ffc107','#0b3d91','#138808'];
-        const total = vals.reduce((a, b) => a + b, 0);
+        const labels = BIG3;
+        const vals   = labels.map(p => t[p]||0);
+        const colors = ['#F5A623','#1A56DB','#00875A'];
+        const total  = vals.reduce((a,b)=>a+b,0);
 
         if(pie) pie.destroy();
         pie = new Chart(document.getElementById('pieChart'), {
-            type: 'doughnut',
-            data: { labels, datasets: [{ data: vals, backgroundColor: colors, borderWidth: 0 }] },
-            options: {
-                maintainAspectRatio: false,
-                layout: { padding: { bottom: 20 } },
-                plugins: {
-                    legend: { position: 'bottom', labels: { color: '#fff', font: { size: 10 }, padding: 10 } },
-                    datalabels: {
-                        color: '#fff',
-                        font: { weight: 'bold', size: 11 },
-                        formatter: (val) => {
-                            if (total === 0) return '';
-                            return val > 0 ? ((val/total)*100).toFixed(1) + '%' : '';
-                        }
-                    }
-                }
+            type:'doughnut',
+            data:{labels, datasets:[{data:vals, backgroundColor:colors, borderWidth:0, hoverOffset:4}]},
+            options:{
+                responsive:true, maintainAspectRatio:true,
+                plugins:{
+                    legend:{position:'bottom',labels:{color:'#6B7280',font:{size:9},boxWidth:10,padding:8}},
+                    datalabels:{color:'#fff',font:{weight:'bold',size:10},
+                        formatter:(val)=>total>0&&val>0?((val/total)*100).toFixed(1)+'%':''},
+                    tooltip:{callbacks:{label:ctx=>`${ctx.label}: ${ctx.parsed.toLocaleString()}`}}
+                },
+                cutout:'68%'
             }
         });
 
         if(bar) bar.destroy();
         bar = new Chart(document.getElementById('barChart'), {
-            type: 'bar',
-            data: { labels, datasets: [{ data: vals, backgroundColor: colors }] },
-            options: {
-                maintainAspectRatio: false,
-                plugins: {
-                    legend: { display: false },
-                    datalabels: {
-                        color: '#fff', anchor: 'end', align: 'top',
-                        font: { weight: 'bold' },
-                        formatter: (val) => val > 0 ? val.toLocaleString() : ''
-                    }
+            type:'bar',
+            data:{labels, datasets:[{data:vals, backgroundColor:colors,
+                borderRadius:4, borderSkipped:false}]},
+            options:{
+                responsive:true, maintainAspectRatio:true,
+                plugins:{
+                    legend:{display:false},
+                    datalabels:{color:'#fff',anchor:'end',align:'top',
+                        font:{weight:'bold',size:9},
+                        formatter:(val)=>val>0?val.toLocaleString():''}
                 },
-                scales: {
-                    y: { beginAtZero: true, ticks: { color: '#fff', font: { size: 9 } }, grid: { color: '#222' } },
-                    x: { ticks: { color: '#fff', font: { size: 10 } } }
+                scales:{
+                    y:{beginAtZero:true, grid:{color:'rgba(255,255,255,0.04)'},
+                       ticks:{color:'#6B7280',font:{size:9}}, border:{display:false}},
+                    x:{grid:{display:false}, ticks:{color:'#9CA3AF',font:{size:9}},
+                       border:{display:false}}
                 }
             }
         });
     }
 
+    // ── Projection ──
+    function updateProjection(totals, puCount) {
+        const TOTAL_PUS = 500;
+        if (puCount < 1) return;
+        const proj = Math.round((totals.ACCORD / puCount) * TOTAL_PUS);
+        const set = (id,v) => { const el=document.getElementById(id); if(el) el.innerText=v; };
+        set('projectionVal',  '~' + proj.toLocaleString());
+        set('ov-projVal',     '~' + proj.toLocaleString());
+        set('projectionNote', `Based on ${puCount} of ~${TOTAL_PUS} PUs`);
+        set('ov-projNote',    `Based on ${puCount} of ~${TOTAL_PUS} PUs`);
+    }
+
+    // ── AI Insight ──
     async function runAI(totals) {
         try {
             const s = document.getElementById('fState').value.toLowerCase();
             const l = document.getElementById('fLGA').value.toLowerCase();
-            const payload = Object.assign({}, totals, { lg: l || 'ALL', state: s || 'Osun' });
-            const res = await fetch(window.location.origin + "/api/ai_interpret", {
-                method: 'POST', headers: { 'Content-Type': 'application/json' },
-                credentials: 'include',
-                body: JSON.stringify(payload)
+            const payload = Object.assign({}, totals, {lg:l||'ALL', state:s||'Osun'});
+            const res = await fetch(window.location.origin + '/api/ai_interpret', {
+                method:'POST', headers:{'Content-Type':'application/json'},
+                credentials:'include', body:JSON.stringify(payload)
             });
             const out = await res.json();
-            const aiEl = document.getElementById('ai_box');
-            if(aiEl) aiEl.innerText = out.analysis;
+            const el = document.getElementById('ai_box');
+            if(el) el.innerText = out.analysis || 'No insight available.';
         } catch(e) {}
     }
 
-    document.addEventListener('DOMContentLoaded', init);
+    // ── Insights (LGA completion etc) ──
+    async function loadInsights() {
+        loadLGACompletion();
+    }
 
+    async function loadLGACompletion() {
+        try {
+            const res = await fetch('/api/lga_completion', {credentials:'include'});
+            const data = await res.json();
+            const el = document.getElementById('lgaCompletionList');
+            if(!el) return;
+            el.innerHTML = '';
+            const lgas = data.slice(0,15);
+            lgas.forEach(row => {
+                const pct = Math.round((row.reported/Math.max(row.total,1))*100);
+                const div = document.createElement('div');
+                div.className = 'lga-row';
+                div.innerHTML = `
+                    <span class="lga-name">${row.lga||row.name}</span>
+                    <div class="lga-bar-bg">
+                        <div class="lga-bar-fill" style="width:${pct}%"></div>
+                    </div>
+                    <span class="lga-pct">${pct}%</span>`;
+                el.appendChild(div);
+            });
+            const countEl = document.getElementById('lga-count');
+            if(countEl) countEl.textContent = `${lgas.filter(r=>r.reported>0).length} / 30`;
+        } catch(e) {}
+    }
+
+    // ── Incidents KPI ──
+    async function loadIncidents() {
+        try {
+            const res = await fetch('/api/incidents', {credentials:'include'});
+            const data = await res.json();
+            const el = document.getElementById('kpi-inc-val');
+            if(el) el.innerText = data.length;
+        } catch(e) {}
+    }
+
+    // ── EC8E viewer ──
+    function showEc8e(url, name) {
+        const panel = document.getElementById('ec8eViewerPanel');
+        const content = document.getElementById('ec8eContent');
+        if(!panel || !content) return;
+        if(url) {
+            panel.classList.add('active');
+            content.innerHTML = `<div style="font-size:0.65rem;color:var(--muted);margin-bottom:6px;">${name}</div>
+                <img src="${url}" style="max-width:100%;max-height:180px;border-radius:8px;
+                    border:1px solid var(--border);cursor:zoom-in;"
+                    onclick="window.open('${url}','_blank')">`;
+        } else {
+            panel.classList.remove('active');
+            content.innerHTML = 'No EC8E image for this PU.';
+        }
+    }
+
+    // ── Overlays ──
+    function openOverlay(id) {
+        const el = document.getElementById(id);
+        if(el) el.classList.add('active');
+    }
+    function closeOverlay(id) {
+        const el = document.getElementById(id);
+        if(el) el.classList.remove('active');
+    }
+
+    // ── Logout ──
     async function logoutDash() {
-        await fetch('/api/logout-dashboard', { method: 'POST' });
+        await fetch('/api/logout-dashboard', {method:'POST'});
         window.location.href = '/dashboard';
     }
 
-
-function openOverlay(id) {
-    const el = document.getElementById(id);
-    if (!el) return;
-    el.classList.add("active");
-
-    if (id === "ov-feed") {
-        const src = document.getElementById("feedList");
-        const dst = document.getElementById("ov-feed-inner");
-        if (src && dst) dst.innerHTML = src.innerHTML;
-    }
-    if (id === "ov-map") {
-        const dst = document.getElementById("ov-map-inner");
-        if (dst && !dst._ovMap) {
-            dst._ovMap = L.map(dst, { zoomControl: true }).setView([7.56, 4.52], 9);
-            L.tileLayer("https://{s}.basemaps.cartocdn.com/dark_all/{z}/{x}/{y}{r}.png").addTo(dst._ovMap);
-            window._ovMapInst = dst._ovMap;
-        }
-        setTimeout(() => { if (dst._ovMap) dst._ovMap.invalidateSize(); }, 200);
-    }
-
-    // BUG FIX #4: Overlay charts now use globalTotals (all 14 parties) instead of reading DOM
-    if (id === "ov-bar") {
-        const vals = PARTIES.map(p => globalTotals[p] || 0);
-        if (window._ovBar) window._ovBar.destroy();
-        window._ovBar = new Chart(document.getElementById("ov-barChart"), {
-            type: "bar",
-            data: { labels: PARTIES, datasets: [{ data: vals, backgroundColor: PARTY_COLORS }] },
-            options: {
-                maintainAspectRatio: false,
-                plugins: {
-                    legend: { display: false },
-                    datalabels: { color: "#fff", anchor: "end", align: "top", formatter: v => v > 0 ? v.toLocaleString() : "" }
-                },
-                scales: {
-                    y: { beginAtZero: true, ticks: { color: "#fff" }, grid: { color: "#222" } },
-                    x: { ticks: { color: "#fff", font: { size: 9 } } }
-                }
-            }
-        });
-    }
-    if (id === "ov-pie") {
-        const vals = PARTIES.map(p => globalTotals[p] || 0);
-        const total = vals.reduce((a,b)=>a+b,0);
-        if (window._ovPie) window._ovPie.destroy();
-        window._ovPie = new Chart(document.getElementById("ov-pieChart"), {
-            type: "doughnut",
-            data: { labels: PARTIES, datasets: [{ data: vals, backgroundColor: PARTY_COLORS, borderWidth: 0 }] },
-            options: {
-                maintainAspectRatio: false,
-                plugins: {
-                    legend: { position: "bottom", labels: { color: "#fff", font: { size: 10 } } },
-                    datalabels: { color: "#fff", font: { weight: "bold" }, formatter: v => total > 0 && v > 0 ? ((v/total)*100).toFixed(1)+"%" : "" }
-                }
-            }
-        });
-    }
-    if (id === "ov-margin") {
-        const v = document.getElementById("marginVal");
-        const l = document.getElementById("marginLead");
-        if (v) { document.getElementById("ov-marginVal").innerText = v.innerText; document.getElementById("ov-marginVal").style.color = v.style.color; }
-        if (l) document.getElementById("ov-marginLead").innerText = l.innerText;
-    }
-    // BUG FIX #4: KPI overlay shows all 14 parties from globalTotals
-    if (id === "ov-kpi") {
-        const container = document.getElementById("ov-kpi-inner");
-        if (!container) return;
-        container.innerHTML = PARTIES.map((p, i) => {
-            const val = (globalTotals[p] || 0).toLocaleString();
-            const color = PARTY_COLORS[i];
-            return "<div style='background:#1e1e1e;border:2px solid "+color+";border-radius:10px;padding:15px 20px;min-width:110px;'>"
-                 + "<div style='font-size:1.6rem;font-weight:900;color:"+color+"'>"+val+"</div>"
-                 + "<div style='color:#aaa;font-size:0.8rem;margin-top:4px;'>"+p+"</div>"
-                 + "</div>";
-        }).join("");
-    }
-    if (id === "ov-ai") {
-        const src = document.getElementById("ai_box");
-        if (src) document.getElementById("ov-ai-inner").innerText = src.innerText;
-    }
-    if (id === "ov-ec8e") {
-        const src = document.getElementById("ec8eViewerPanel");
-        if (src) document.getElementById("ov-ec8e-inner").innerHTML = src.innerHTML;
-    }
-}
-
-function closeOverlay(id) {
-    const el = document.getElementById(id);
-    if (el) el.classList.remove("active");
-}
-
-function openEc8eLightbox(url) {
-    document.getElementById("ec8eLightboxImg").src = url.startsWith("http") ? url : window.location.origin + url;
-    document.getElementById("ec8eLightbox").style.display = "flex";
-}
-
-function showEc8e(url, puName) {
-    const panel = document.getElementById("ec8eViewerPanel");
-    if (!panel) return;
-    panel.innerHTML = "";
-    const nameDiv = document.createElement("div");
-    nameDiv.style.cssText = "font-size:0.7rem;color:#ffc107;font-weight:bold;margin-bottom:6px;padding:0 4px;";
-    nameDiv.textContent = puName;
-    panel.appendChild(nameDiv);
-    if (url) {
-        const absUrl = url.startsWith("http") ? url : window.location.origin + url;
-        const wrap = document.createElement("div");
-        wrap.style.position = "relative";
-        const img = document.createElement("img");
-        img.src = absUrl;
-        img.style.cssText = "max-width:100%;max-height:180px;border-radius:6px;border:2px solid #ffc107;cursor:zoom-in;display:block;margin:0 auto;object-fit:contain;";
-        img.title = "Click to enlarge";
-        img.onclick = function() { openEc8eLightbox(this.src); };
-        img.onerror = function() {
-            wrap.innerHTML = "<div style='padding:16px;color:#666;font-size:0.75rem;text-align:center;'>⚠️ Image unavailable<br><small>Re-submit with image to update</small></div>";
-        };
-        const hint = document.createElement("div");
-        hint.style.cssText = "position:absolute;bottom:6px;right:6px;background:rgba(0,0,0,0.7);color:#ffc107;font-size:0.6rem;padding:2px 6px;border-radius:4px;pointer-events:none;";
-        hint.textContent = "🔍 CLICK TO ENLARGE";
-        wrap.appendChild(img);
-        wrap.appendChild(hint);
-        panel.appendChild(wrap);
-        const footer = document.createElement("div");
-        footer.style.cssText = "font-size:0.65rem;color:#555;margin-top:5px;text-align:center;";
-        footer.textContent = "EC 8E FORM ON FILE";
-        panel.appendChild(footer);
-    } else {
-        const msg = document.createElement("span");
-        msg.style.cssText = "color:#555;font-size:0.72rem;font-style:italic;";
-        msg.textContent = "⚠️ No EC 8E image uploaded for this PU";
-        panel.appendChild(msg);
-    }
-}
-
-document.addEventListener("DOMContentLoaded", function() {
-    // EC8E panel is now static HTML — no injection needed
-
-    // Only inject ov-btn for LIVE PU FEED (others are now static in HTML)
-    [["LIVE PU FEED","ov-feed"]].forEach(function(pair) {
-        document.querySelectorAll(".panel-header").forEach(function(h) {
-            if (h.textContent.includes(pair[0]) && !h.querySelector(".ov-btn")) {
-                const b = document.createElement("button"); b.className = "ov-btn"; b.innerText = "⛶"; b.onclick = function(){ openOverlay(pair[1]); }; h.appendChild(b);
-            }
-        });
-    });
-    document.querySelectorAll(".chart-box").forEach(function(box, i) {
-        const ids = ["ov-bar","ov-pie"];
-        if (!ids[i]) return;
-        const b = document.createElement("button"); b.className = "ov-btn"; b.style.cssText = "position:absolute;top:6px;right:8px;z-index:10;"; b.innerText = "⛶"; b.onclick = function(){ openOverlay(ids[i]); }; box.style.position = "relative"; box.appendChild(b);
-    });
-    const mapEl = document.getElementById("map");
-    if (mapEl) {
-        const b = document.createElement("button"); b.className = "ov-btn"; b.style.cssText = "position:absolute;top:8px;right:8px;z-index:1000;"; b.innerText = "⛶"; b.onclick = function(){ openOverlay("ov-map"); }; mapEl.style.position = "relative"; mapEl.appendChild(b);
-    }
-    const kpiGroup = document.querySelector(".nav-kpi-group");
-    if (kpiGroup && !kpiGroup.querySelector(".ov-btn")) {
-        kpiGroup.style.position = "relative";
-        const kb = document.createElement("button");
-        kb.className = "ov-btn";
-        kb.style.cssText = "position:absolute;top:4px;right:4px;z-index:10;";
-        kb.innerText = "⛶";
-        kb.onclick = function(){ openOverlay("ov-kpi"); };
-        kpiGroup.appendChild(kb);
-    }
-    const marginCard = document.querySelector(".margin-card");
-    if (marginCard && !marginCard.querySelector(".ov-btn")) {
-        marginCard.style.position = "relative";
-        const mb = document.createElement("button");
-        mb.className = "ov-btn";
-        mb.style.cssText = "position:absolute;top:6px;right:8px;z-index:10;";
-        mb.innerText = "⛶";
-        mb.onclick = function(){ openOverlay("ov-margin"); };
-        marginCard.appendChild(mb);
-    }
-});
-
-document.addEventListener("keydown", function(e) {
-    if (e.key === "Escape") {
-        ["ov-bar","ov-pie","ov-map","ov-feed","ov-margin","ov-ai","ov-ec8e","ov-kpi","ov-lga","ov-swing","ov-flags","ov-proj","ov-timeline"].forEach(function(id){ closeOverlay(id); });
-        document.getElementById("ec8eLightbox").style.display = "none";
-    }
-});
-
-
-// ── INSIGHT LOADERS ───────────────────────────────────────────────────────────
-
-async function loadInsights() {
-    loadLGACompletion();
-    loadSwingPUs();
-    loadIntegrityFlags();
-    loadAgentLeaderboard();
-    loadCollationTimeline();
-}
-
-async function loadLGACompletion() {
-    try {
-        const res = await fetch(window.location.origin + '/api/lga_completion', { credentials: 'include' });
-        const data = await res.json();
-        const el = document.getElementById('lgaCompletionList');
-        const ovEl = document.getElementById('ov-lga-inner');
-
-        // threshold: count LGAs where ACCORD >= 25% from live globalData
-        const lgaMap = {};
-        globalData.forEach(d => {
-            const lga = (d.lga || '').toUpperCase();
-            if (!lgaMap[lga]) lgaMap[lga] = { accord: 0, total: 0 };
-            lgaMap[lga].accord += d.votes_party_ACCORD || 0;
-            ['ACCORD','AA','AAC','ADC','ADP','APGA','APC','APM','APP','BP','NNPP','PRP','YPP','ZLP']
-              .forEach(p => { lgaMap[lga].total += d['votes_party_' + p] || 0; });
-        });
-        let qualified = 0;
-        Object.values(lgaMap).forEach(v => { if (v.total > 0 && (v.accord/v.total) >= 0.25) qualified++; });
-        const tf = document.getElementById('thresholdFill');
-        const tl = document.getElementById('thresholdLGAs');
-        if (tf) tf.style.width = Math.min((qualified/20)*100, 100) + '%';
-        if (tl) tl.textContent = qualified;
-
-        // PU count + turnout
-        const pr = document.getElementById('puReported');
-        if (pr) pr.textContent = globalData.length;
-        let tSum = 0, tCnt = 0;
-        globalData.forEach(d => {
-            if (d.reg_voters > 0 && d.total_accredited > 0) {
-                tSum += (d.total_accredited / d.reg_voters) * 100; tCnt++;
-            }
-        });
-        const ta = document.getElementById('turnoutAvg');
-        if (ta) ta.textContent = tCnt > 0 ? (tSum/tCnt).toFixed(1) + '%' : '--%';
-
-        if (!data.length) { if(el) el.innerHTML = '<div style="color:#555;font-size:0.7rem;">No data</div>'; return; }
-        const rowHtml = items => items.map(d =>
-            '<div class="lga-row">' +
-            '<div class="lga-name">' + d.lga + '</div>' +
-            '<div class="lga-bar-wrap"><div class="lga-bar-fill" style="width:' + Math.min(d.pct,100) + '%"></div></div>' +
-            '<div class="lga-pct">' + d.pct + '%</div>' +
-            '<div style="font-size:0.6rem;color:#555;margin-left:4px;">' + d.submitted + '/' + d.total + '</div>' +
-            '</div>').join('');
-        if (el) el.innerHTML = rowHtml(data.slice(0,10));
-        if (ovEl) ovEl.innerHTML = rowHtml(data);
-    } catch(e) { console.error('LGA err', e); }
-}
-
-async function loadSwingPUs() {
-    try {
-        const res = await fetch(window.location.origin + '/api/swing_pus', { credentials: 'include' });
-        const data = await res.json();
-        const el = document.getElementById('swingList');
-        const ovEl = document.getElementById('ov-swing-inner');
-        const cnt = document.getElementById('swingCount');
-        if (cnt) cnt.textContent = data.length;
-        if (!data.length) { if(el) el.innerHTML = '<div style="color:#00ff88;font-size:0.7rem;">No swing PUs</div>'; return; }
-        const render = items => items.map(d =>
-            '<div class="swing-item ' + (d.margin >= 0 ? 'lead' : '') + '">' +
-            '<div style="font-weight:bold;color:' + (d.margin>=0?'#ffc107':'#ff4444') + '">' + d.pu_name + '</div>' +
-            '<div style="color:#aaa;">' + d.lga + ' / ' + d.ward + '</div>' +
-            '<div>ACCORD <b>' + d.accord + '</b> vs ' + d.rival + ' <b>' + d.rival_votes + '</b> | margin: <b style="color:' + (d.margin>=0?'#00ff88':'#ff4444') + '">' + (d.margin>0?'+':'') + d.margin + '</b></div>' +
-            '</div>').join('');
-        if (el) el.innerHTML = render(data.slice(0,4));
-        if (ovEl) ovEl.innerHTML = render(data);
-    } catch(e) {}
-}
-
-async function loadIntegrityFlags() {
-    try {
-        const res = await fetch(window.location.origin + '/api/integrity_flags', { credentials: 'include' });
-        const data = await res.json();
-        const el = document.getElementById('flagList');
-        const ovEl = document.getElementById('ov-flags-inner');
-        const cnt = document.getElementById('flagCount');
-        if (cnt) cnt.textContent = data.length;
-        if (!data.length) {
-            const ok = '<div style="color:#00ff88;font-size:0.7rem;">All clear</div>';
-            if(el) el.innerHTML = ok; if(ovEl) ovEl.innerHTML = ok; return;
-        }
-        const render = items => items.map(d =>
-            '<div class="flag-item ' + d.severity + '">' +
-            '<div style="font-weight:bold;color:#ff6600;">' + d.pu_name + '</div>' +
-            '<div style="color:#aaa;font-size:0.65rem;">' + d.lga + ' / ' + d.ward + '</div>' +
-            d.issues.map(i => '<div style="color:#ffaa44;">' + i + '</div>').join('') +
-            '</div>').join('');
-        if (el) el.innerHTML = render(data.slice(0,3));
-        if (ovEl) ovEl.innerHTML = render(data);
-    } catch(e) {}
-}
-
-async function loadAgentLeaderboard() {
-    try {
-        const res = await fetch(window.location.origin + '/api/agent_leaderboard', { credentials: 'include' });
-        const data = await res.json();
-        const el = document.getElementById('agentList');
-        const ovEl = document.getElementById('ov-agentList');
-        if (!data.length) { if(el) el.innerHTML = '<div style="color:#555;font-size:0.7rem;">No data</div>'; return; }
-        const render = items => items.map((d,i) =>
-            '<div class="agent-row">' +
-            '<span style="color:' + (i===0?'#ffc107':i===1?'#aaa':i===2?'#cd7f32':'#555') + '">' +
-            (i===0?'1st':i===1?'2nd':i===2?'3rd':'#'+(i+1)) + ' ' + d.officer_id + '</span>' +
-            '<span style="color:#ffc107;font-weight:bold;">' + d.submissions + ' PU' + (d.submissions>1?'s':'') + '</span>' +
-            '</div>').join('');
-        if (el) el.innerHTML = render(data.slice(0,5));
-        if (ovEl) ovEl.innerHTML = render(data);
-    } catch(e) {}
-}
-
-async function loadCollationTimeline() {
-    try {
-        const res = await fetch(window.location.origin + '/api/collation_timeline', { credentials: 'include' });
-        const data = await res.json();
-        const statusEl = document.getElementById('timelineStatus');
-        const listEl = document.getElementById('ov-timeline-list');
-        if (!data.length) { if(statusEl) statusEl.textContent = 'No submissions'; return; }
-        const first = data[0].timestamp ? new Date(data[0].timestamp) : null;
-        if (statusEl && first) statusEl.textContent = first.toLocaleTimeString('en-NG',{hour:'2-digit',minute:'2-digit'});
-        if (listEl) {
-            listEl.innerHTML = data.map(d => {
-                const t = d.timestamp ? new Date(d.timestamp).toLocaleString('en-NG',{hour:'2-digit',minute:'2-digit',day:'numeric',month:'short'}) : '--';
-                return '<div style="display:flex;gap:8px;padding:4px 0;border-bottom:1px solid #1a1a1a;font-size:0.72rem;">' +
-                       '<span class="timeline-dot"></span><span style="color:#aaa;width:120px;">' + t + '</span>' +
-                       '<span style="color:#fff;">' + d.pu_name + '</span>' +
-                       '<span style="color:#555;margin-left:auto;">' + d.lga + '</span></div>';
-            }).join('');
-        }
-        const hourMap = {};
-        data.forEach(d => {
-            if (!d.timestamp) return;
-            const h = new Date(d.timestamp).getHours() + ':00';
-            hourMap[h] = (hourMap[h] || 0) + 1;
-        });
-        const labels = Object.keys(hourMap).sort();
-        const vals = labels.map(l => hourMap[l]);
-        const cvs = document.getElementById('ov-timelineChart');
-        if (cvs) {
-            if (window._tlChart) window._tlChart.destroy();
-            window._tlChart = new Chart(cvs, {
-                type: 'bar',
-                data: { labels, datasets: [{ label: 'Submissions', data: vals, backgroundColor: '#ffc107' }] },
-                options: {
-                    maintainAspectRatio: false,
-                    plugins: { legend: { display: false }, datalabels: { color: '#fff', anchor: 'end', align: 'top' } },
-                    scales: { y: { beginAtZero: true, ticks: { color: '#fff', stepSize: 1 }, grid: { color: '#222' } }, x: { ticks: { color: '#fff' } } }
-                }
-            });
-        }
-    } catch(e) {}
-}
-
-function updateProjection(totals, reportedPUs) {
-    const TOTAL_PUS = 3763;
-    const accord = totals.ACCORD || 0;
-    const totalVotes = Object.values(totals).reduce((a,b) => a+b, 0);
-    const pv = document.getElementById('projectionVal');
-    const pn = document.getElementById('projectionNote');
-    const opv = document.getElementById('ov-projVal');
-    const opn = document.getElementById('ov-projNote');
-    if (reportedPUs > 0 && totalVotes > 0) {
-        const share = accord / totalVotes;
-        const avgPerPU = totalVotes / reportedPUs;
-        const projected = Math.round(share * avgPerPU * TOTAL_PUS);
-        const pct = ((reportedPUs / TOTAL_PUS) * 100).toFixed(1);
-        const txt = projected.toLocaleString();
-        const note = pct + '% of PUs reported (' + reportedPUs + '/' + TOTAL_PUS + ')';
-        if(pv) pv.textContent = txt; if(pn) pn.textContent = note;
-        if(opv) opv.textContent = txt; if(opn) opn.textContent = note;
-    } else { if(pv) pv.textContent = '--'; }
-}
-
+    // ── Boot ──
+    document.addEventListener('DOMContentLoaded', init);
+    setInterval(refreshData,   2000);
+    setInterval(loadIncidents, 2000);
+    setInterval(loadInsights,  2000);
 </script>
-
-<!-- EC8E Lightbox -->
-<div id="ec8eLightbox" style="display:none;position:fixed;inset:0;z-index:9999999;background:rgba(0,0,0,0.96);align-items:center;justify-content:center;" onclick="this.style.display='none'">
-  <img id="ec8eLightboxImg" src="#" style="max-width:95vw;max-height:95vh;border-radius:8px;border:2px solid #ffc107;">
-</div>
-
-
-<div id="ov-feed"   class="ov-overlay"><div class="ov-inner"><button class="ov-close" onclick="closeOverlay('ov-feed')">✕</button><h5 style="color:#ffc107">LIVE PU FEED</h5><div id="ov-feed-inner"></div></div></div>
-<div id="ov-map"    class="ov-overlay"><div class="ov-inner" style="height:88vh;"><button class="ov-close" onclick="closeOverlay('ov-map')">✕</button><h5 style="color:#ffc107">MAP</h5><div id="ov-map-inner" style="height:80vh;border-radius:8px;overflow:hidden;"></div></div></div>
-<div id="ov-bar"    class="ov-overlay"><div class="ov-inner"><button class="ov-close" onclick="closeOverlay('ov-bar')">✕</button><h5 style="color:#ffc107">BAR CHART — ALL 14 PARTIES</h5><div style="position:relative;height:350px;"><canvas id="ov-barChart"></canvas></div></div></div>
-<div id="ov-pie"    class="ov-overlay"><div class="ov-inner"><button class="ov-close" onclick="closeOverlay('ov-pie')">✕</button><h5 style="color:#ffc107">VOTE SHARE — ALL 14 PARTIES</h5><div style="position:relative;height:400px;"><canvas id="ov-pieChart"></canvas></div></div></div>
-<div id="ov-margin" class="ov-overlay"><div class="ov-inner"><button class="ov-close" onclick="closeOverlay('ov-margin')">✕</button><h5 style="color:#ffc107">VOTE MARGIN</h5><div style="font-size:2rem;color:#ffc107;text-align:center;padding:30px 0;" id="ov-marginVal">—</div><div style="text-align:center;color:#aaa;" id="ov-marginLead"></div></div></div>
-<div id="ov-ai"     class="ov-overlay"><div class="ov-inner"><button class="ov-close" onclick="closeOverlay('ov-ai')">✕</button><h5 style="color:#ffc107">AI ANALYTICS LOG</h5><pre id="ov-ai-inner" style="color:#ccc;white-space:pre-wrap;font-size:0.82rem;"></pre></div></div>
-<div id="ov-ec8e"   class="ov-overlay"><div class="ov-inner" style="text-align:center;"><button class="ov-close" onclick="closeOverlay('ov-ec8e')">✕</button><h5 style="color:#ffc107">EC 8E FORM VIEWER</h5><div id="ov-ec8e-inner"></div></div></div>
-<div id="ov-kpi" class="ov-overlay"><div class="ov-inner" style="text-align:center;">
-  <button class="ov-close" onclick="closeOverlay('ov-kpi')">✕</button>
-  <h5 style="color:#ffc107;margin-bottom:20px;">ALL PARTY VOTE TOTALS</h5>
-  <div id="ov-kpi-inner" style="display:flex;gap:15px;justify-content:center;flex-wrap:wrap;"></div>
-</div></div>
-
-
-
-
-<!-- INSIGHT ROW -->
-<div id="insightRow" style="display:grid;grid-template-columns:repeat(4,1fr);gap:8px;padding:8px 8px 0;">
-  <div class="insight-card" style="overflow-y:auto;max-height:220px;">
-    <div class="insight-title">LGA COMPLETION <button class="ov-btn" style="float:right;" onclick="openOverlay('ov-lga')">+</button></div>
-    <div id="lgaCompletionList"><div style="color:#555;font-size:0.7rem;">Loading...</div></div>
-  </div>
-  <div class="insight-card" style="overflow-y:auto;max-height:220px;">
-    <div class="insight-title">SWING PUs <span id="swingCount" class="badge bg-danger ms-1" style="font-size:0.6rem;">0</span> <button class="ov-btn" style="float:right;" onclick="openOverlay('ov-swing')">+</button></div>
-    <div id="swingList"><div style="color:#555;font-size:0.7rem;">Loading...</div></div>
-  </div>
-  <div class="insight-card" style="overflow-y:auto;max-height:220px;">
-    <div class="insight-title">INTEGRITY FLAGS <span id="flagCount" class="badge bg-warning text-dark ms-1" style="font-size:0.6rem;">0</span> <button class="ov-btn" style="float:right;" onclick="openOverlay('ov-flags')">+</button></div>
-    <div id="flagList"><div style="color:#555;font-size:0.7rem;">Loading...</div></div>
-  </div>
-  <div class="insight-card" style="overflow-y:auto;max-height:220px;">
-    <div class="insight-title">PROJECTION &amp; AGENTS <button class="ov-btn" style="float:right;" onclick="openOverlay('ov-proj')">+</button></div>
-    <div style="margin-bottom:6px;">
-      <div style="font-size:0.6rem;color:#aaa;">PROJECTED FINAL (ACCORD)</div>
-      <div id="projectionVal" class="projection-val">--</div>
-      <div id="projectionNote" style="font-size:0.6rem;color:#555;">Based on current % x 3,763 PUs</div>
-    </div>
-    <div style="font-size:0.6rem;color:#ffc107;font-weight:bold;margin-bottom:4px;">AGENT LEADERBOARD</div>
-    <div id="agentList"><div style="color:#555;font-size:0.7rem;">Loading...</div></div>
-  </div>
-</div>
-
-<!-- THRESHOLD TRACKER -->
-<div style="padding:8px 8px 12px;">
-  <div class="insight-card">
-    <div class="insight-title">WINNING THRESHOLD -- 25% IN 20+ LGAs + HIGHEST TOTAL <button class="ov-btn" style="float:right;" onclick="openOverlay('ov-timeline')">Timeline</button></div>
-    <div style="display:flex;gap:20px;align-items:center;flex-wrap:wrap;">
-      <div style="flex:1;min-width:200px;">
-        <div style="font-size:0.65rem;color:#aaa;margin-bottom:3px;">LGAs WITH ACCORD &gt;=25% SHARE</div>
-        <div class="threshold-bar" style="height:12px;"><div id="thresholdFill" class="threshold-fill" style="width:0%"></div></div>
-        <div style="font-size:0.7rem;margin-top:3px;"><span id="thresholdLGAs" style="color:#ffc107;font-weight:bold;">0</span><span style="color:#555;"> / 30 LGAs (need 20)</span></div>
-      </div>
-      <div style="text-align:center;">
-        <div style="font-size:0.6rem;color:#aaa;">TURNOUT AVG</div>
-        <div id="turnoutAvg" style="font-size:1.1rem;font-weight:900;color:#0dcaf0;">--%</div>
-      </div>
-      <div style="text-align:center;">
-        <div style="font-size:0.6rem;color:#aaa;">FIRST SUBMISSION</div>
-        <div id="timelineStatus" style="font-size:0.75rem;color:#aaa;">--</div>
-      </div>
-      <div style="text-align:center;">
-        <div style="font-size:0.6rem;color:#aaa;">PUs REPORTED</div>
-        <div id="puReported" style="font-size:1.1rem;font-weight:900;color:#ffc107;">0</div>
-        <div style="font-size:0.6rem;color:#555;">of 3,763 total</div>
-      </div>
-    </div>
-  </div>
-</div>
-
-<!-- NEW OVERLAYS -->
-<div id="ov-lga" class="ov-overlay"><div class="ov-inner"><button class="ov-close" onclick="closeOverlay('ov-lga')">X</button>
-  <h5 style="color:#ffc107">LGA COMPLETION</h5><div id="ov-lga-inner" style="max-height:75vh;overflow-y:auto;"></div>
-</div></div>
-<div id="ov-swing" class="ov-overlay"><div class="ov-inner"><button class="ov-close" onclick="closeOverlay('ov-swing')">X</button>
-  <h5 style="color:#ff4444">SWING POLLING UNITS</h5><div id="ov-swing-inner" style="max-height:75vh;overflow-y:auto;"></div>
-</div></div>
-<div id="ov-flags" class="ov-overlay"><div class="ov-inner"><button class="ov-close" onclick="closeOverlay('ov-flags')">X</button>
-  <h5 style="color:#ff6600">RESULT INTEGRITY FLAGS</h5><div id="ov-flags-inner" style="max-height:75vh;overflow-y:auto;"></div>
-</div></div>
-<div id="ov-proj" class="ov-overlay"><div class="ov-inner"><button class="ov-close" onclick="closeOverlay('ov-proj')">X</button>
-  <h5 style="color:#00ff88">PROJECTED TALLY + AGENTS</h5>
-  <div style="display:grid;grid-template-columns:1fr 1fr;gap:20px;">
-    <div>
-      <div style="font-size:0.75rem;color:#aaa;margin-bottom:8px;">PROJECTED ACCORD TOTAL</div>
-      <div id="ov-projVal" style="font-size:3rem;font-weight:900;color:#00ff88;">--</div>
-      <div id="ov-projNote" style="font-size:0.75rem;color:#555;margin-top:4px;"></div>
-    </div>
-    <div><div style="font-size:0.75rem;color:#ffc107;font-weight:bold;margin-bottom:8px;">AGENT LEADERBOARD</div><div id="ov-agentList"></div></div>
-  </div>
-</div></div>
-<div id="ov-timeline" class="ov-overlay"><div class="ov-inner"><button class="ov-close" onclick="closeOverlay('ov-timeline')">X</button>
-  <h5 style="color:#ffc107">COLLATION TIMELINE</h5>
-  <div style="position:relative;height:320px;"><canvas id="ov-timelineChart"></canvas></div>
-  <div id="ov-timeline-list" style="max-height:200px;overflow-y:auto;margin-top:12px;"></div>
-</div></div>
-
 </body>
-</html>"
-
+</html>
 """
