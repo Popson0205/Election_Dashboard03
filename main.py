@@ -4754,7 +4754,7 @@ DASHBOARD_HTML = """
         --text:   #F0F2F5;
         --muted:  #6B7280;
         --nav-h:  62px;
-        --kpi-h:  88px;
+        --kpi-h:  82px;
     }
     *,*::before,*::after{box-sizing:border-box;margin:0;padding:0;}
     html,body{height:100%;background:var(--bg);color:var(--text);
@@ -4837,7 +4837,7 @@ DASHBOARD_HTML = """
     .main-content{
         display:grid;grid-template-columns:290px 1fr 280px;
         gap:8px;padding:0 8px 8px;
-        height:calc(100vh - var(--nav-h) - var(--kpi-h) - 16px);overflow:hidden;
+        height:calc(100vh - var(--nav-h) - var(--kpi-h));overflow:hidden;
     }
     .side-panel{background:var(--s1);border:1px solid var(--border);border-radius:12px;
         display:flex;flex-direction:column;overflow:hidden;min-height:0;}
@@ -4891,10 +4891,10 @@ DASHBOARD_HTML = """
         color:var(--gold);padding:1px 5px;border-radius:4px;margin-left:4px;}
 
     /* Centre column */
-    .centre-col{display:flex;flex-direction:column;gap:8px;min-height:0;overflow:hidden;height:100%;}
-    #map{height:280px;flex-shrink:0;border-radius:12px;background:#0d1520;
-        border:1px solid var(--border);z-index:1;}
-    .chart-row{display:grid;grid-template-columns:1fr 1fr;gap:8px;flex:1;min-height:0;}
+    .centre-col{display:flex;flex-direction:column;gap:8px;min-height:0;overflow:hidden;}
+    #map{flex:0 0 42%;border-radius:12px;background:#0d1520;
+        border:1px solid var(--border);min-height:200px;z-index:1;}
+    .chart-row{display:grid;grid-template-columns:1fr 1fr;gap:8px;flex:1;min-height:120px;}
     .chart-box{background:var(--s1);border:1px solid var(--border);border-radius:12px;
         padding:12px;display:flex;flex-direction:column;min-height:0;overflow:hidden;}
     .chart-title{font-size:0.62rem;font-weight:700;color:#9CA3AF;
@@ -5092,11 +5092,11 @@ DASHBOARD_HTML = """
         <div id="map"></div>
         <div class="chart-row">
             <div class="chart-box">
-                <div class="chart-title">Vote Share — Big 3</div>
+                <div class="chart-title">🗳 Vote Share %</div>
                 <canvas id="pieChart"></canvas>
             </div>
             <div class="chart-box">
-                <div class="chart-title">ACCORD vs Rivals</div>
+                <div class="chart-title">📊 Party Vote Count</div>
                 <canvas id="barChart"></canvas>
             </div>
         </div>
@@ -5423,16 +5423,17 @@ DASHBOARD_HTML = """
                 borderRadius:4, borderSkipped:false}]},
             options:{
                 responsive:true, maintainAspectRatio:false,
+                indexAxis:'y',
                 plugins:{
                     legend:{display:false},
-                    datalabels:{color:'#fff',anchor:'end',align:'top',
+                    datalabels:{color:'#fff',anchor:'end',align:'right',
                         font:{weight:'bold',size:9},
                         formatter:(val)=>val>0?val.toLocaleString():''}
                 },
                 scales:{
-                    y:{beginAtZero:true, grid:{color:'rgba(255,255,255,0.04)'},
+                    x:{beginAtZero:true, grid:{color:'rgba(255,255,255,0.04)'},
                        ticks:{color:'#6B7280',font:{size:9}}, border:{display:false}},
-                    x:{grid:{display:false}, ticks:{color:'#9CA3AF',font:{size:9}},
+                    y:{grid:{display:false}, ticks:{color:'#F0F2F5',font:{size:10,weight:'600'}},
                        border:{display:false}}
                 }
             }
