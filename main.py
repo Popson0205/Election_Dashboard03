@@ -452,6 +452,184 @@ def init_db():
 
 init_db()
 
+# =============================================================================
+# ── SUPABASE OFFICER MANAGEMENT ───────────────────────────────────────────────
+# Officers uploaded via /api/upload-officers are stored permanently in Supabase.
+# This survives all Render redeployments. Add SUPABASE_URL + SUPABASE_KEY env
+# vars on Render, and create the officers table in your Supabase SQL editor:
+#
+#   CREATE TABLE officers (
+#     officer_id   TEXT PRIMARY KEY,
+#     lga          TEXT,
+#     ward         TEXT,
+#     polling_unit TEXT,
+#     phone        TEXT
+#   );
+# =============================================================================
+
+def get_supabase():
+    """Return a Supabase client, or None if env vars are not set."""
+    url = os.environ.get("SUPABASE_URL", "").strip()
+    key = os.environ.get("SUPABASE_KEY", "").strip()
+    if not url or not key:
+        logger.warning("SUPABASE_URL / SUPABASE_KEY not set — Supabase disabled.")
+        return None
+    try:
+        from supabase import create_client
+        return create_client(url, key)
+    except Exception as e:
+        logger.error(f"Supabase client error: {e}")
+        return None
+
+def _ensure_officers_table():
+    """Check the officers table exists at startup and log a clear error if not."""
+    sb = get_supabase()
+    if not sb:
+        return
+    try:
+        sb.table("officers").select("officer_id").limit(1).execute()
+        logger.info("✅ Supabase 'officers' table found.")
+    except Exception as e:
+        logger.error(
+            "❌ Supabase 'officers' table missing. Create it in Supabase SQL editor:\n"
+            "  CREATE TABLE officers (\n"
+            "    officer_id   TEXT PRIMARY KEY,\n"
+            "    lga          TEXT,\n"
+            "    ward         TEXT,\n"
+            "    polling_unit TEXT,\n"
+            "    phone        TEXT\n"
+            "  );\n"
+            f"Error: {e}"
+        )
+
+_ensure_officers_table()
+
+def _get_supabase_officer(officer_id: str, lg: str = "") -> dict | None:
+    """Look up one officer in Supabase. Returns row dict or None."""
+    sb = get_supabase()
+    if not sb:
+        return None
+    try:
+        query = sb.table("officers").select("*").eq("officer_id", officer_id)
+        if lg:
+            query = query.ilike("lga", lg)
+        res = query.limit(1).execute()
+        return res.data[0] if res.data else None
+    except Exception as e:
+        logger.error(f"Supabase officer lookup error: {e}")
+        return None
+
+
+@app.post("/api/upload-officers")
+async def upload_officers(request: Request, file: UploadFile = File(...)):
+    """
+    Admin-only. Upload a CSV of officers → saved permanently to Supabase.
+    Required columns: officer_id, lga, ward, polling_unit, phone
+    Existing officers are updated (upsert). Safe to re-upload an expanded list.
+    """
+    _require_dashboard(request)
+
+    sb = get_supabase()
+    if not sb:
+        raise HTTPException(
+            status_code=503,
+            detail="Supabase not configured. Set SUPABASE_URL and SUPABASE_KEY env vars on Render."
+        )
+
+    raw = await file.read()
+    try:
+        text = raw.decode("utf-8-sig")   # strips Excel BOM automatically
+    except UnicodeDecodeError:
+        text = raw.decode("latin-1")
+
+    reader = csv.DictReader(io.StringIO(text))
+    required = {"officer_id", "lga", "ward", "polling_unit", "phone"}
+    if not reader.fieldnames or not required.issubset({c.strip().lower() for c in reader.fieldnames}):
+        raise HTTPException(
+            status_code=400,
+            detail=f"CSV must contain columns: {', '.join(sorted(required))}"
+        )
+
+    rows, skipped = [], []
+    for i, row in enumerate(reader, start=2):
+        r     = {k.strip().lower(): (v or "").strip() for k, v in row.items()}
+        oid   = r.get("officer_id", "")
+        phone = _clean_phone(r.get("phone", ""))
+        if not oid:
+            skipped.append(f"Row {i}: missing officer_id")
+            continue
+        rows.append({
+            "officer_id":   oid,
+            "lga":          r.get("lga", ""),
+            "ward":         r.get("ward", ""),
+            "polling_unit": r.get("polling_unit", ""),
+            "phone":        phone,
+        })
+
+    if not rows:
+        raise HTTPException(status_code=400, detail="No valid rows found in CSV.")
+
+    total_saved = 0
+    for start in range(0, len(rows), 500):
+        batch = rows[start:start + 500]
+        try:
+            sb.table("officers").upsert(batch, on_conflict="officer_id").execute()
+            total_saved += len(batch)
+        except Exception as e:
+            raise HTTPException(status_code=500, detail=f"Database error: {e}")
+
+    logger.info(f"✅ {total_saved} officers upserted to Supabase.")
+    return {
+        "status":          "success",
+        "saved":           total_saved,
+        "skipped":         len(skipped),
+        "skipped_details": skipped[:20],
+        "message":         f"{total_saved} officers saved permanently to Supabase.",
+    }
+
+
+@app.get("/api/officers")
+async def list_officers(request: Request, lga: str = "", search: str = ""):
+    """Admin-only: list all officers stored in Supabase."""
+    _require_dashboard(request)
+    sb = get_supabase()
+    if not sb:
+        raise HTTPException(status_code=503, detail="Supabase not configured.")
+    try:
+        q = sb.table("officers").select("*").order("officer_id")
+        if lga:
+            q = q.ilike("lga", f"%{lga}%")
+        if search:
+            q = q.ilike("officer_id", f"%{search}%")
+        res = q.execute()
+        return {"status": "success", "count": len(res.data), "officers": res.data}
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.post("/api/officers/delete")
+async def delete_officer(request: Request):
+    """Admin-only: remove a single officer by officer_id."""
+    _require_dashboard(request)
+    sb = get_supabase()
+    if not sb:
+        raise HTTPException(status_code=503, detail="Supabase not configured.")
+    try:
+        body = await request.json()
+        oid  = str(body.get("officer_id", "")).strip()
+        if not oid:
+            raise HTTPException(status_code=400, detail="officer_id required.")
+        sb.table("officers").delete().eq("officer_id", oid).execute()
+        return {"status": "success", "message": f"Officer {oid} deleted."}
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+# =============================================================================
+# END SUPABASE BLOCK
+# =============================================================================
+
 # --- API ENDPOINTS ---
 @app.get("/api/validate_officer/{officer_id}")
 def validate_officer(officer_id: str, request: Request, lg: str = ""):
@@ -462,6 +640,53 @@ def validate_officer(officer_id: str, request: Request, lg: str = ""):
     lg = lg.strip()[:60]
     if not lg:
         return {"valid": False, "message": "Please select your LGA first."}
+
+    # ── 1. Check Supabase officers table first ────────────────────────────────
+    sb_officer = _get_supabase_officer(officer_id, lg)
+    if sb_officer:
+        parts = officer_id.split("-", 1)
+        pu_data = {}
+        if len(parts) == 2:
+            ward_code, pu_code = parts[0].strip(), parts[1].strip()
+            try:
+                with get_db() as conn:
+                    with conn.cursor() as cur:
+                        cur.execute(
+                            """SELECT ward, lg, location, pu_code, ward_code, state
+                               FROM polling_units
+                               WHERE ward_code = ? AND pu_code = ?
+                               AND LOWER(state) = 'osun' AND LOWER(lg) = LOWER(?)
+                               LIMIT 1""",
+                            (ward_code, pu_code, lg)
+                        )
+                        row = cur.fetchone()
+                        if row:
+                            pu_data = {
+                                "state":     row["state"] or "osun",
+                                "ward":      row["ward"],
+                                "lg":        row["lg"],
+                                "location":  row["location"],
+                                "pu_code":   row["pu_code"],
+                                "ward_code": row["ward_code"],
+                            }
+            except Exception:
+                pass
+        if not pu_data:
+            pu_data = {
+                "state":     "osun",
+                "ward":      sb_officer.get("ward", ""),
+                "lg":        sb_officer.get("lga", lg),
+                "location":  sb_officer.get("polling_unit", ""),
+                "pu_code":   officer_id.split("-", 1)[1] if "-" in officer_id else officer_id,
+                "ward_code": officer_id.split("-", 1)[0] if "-" in officer_id else "",
+            }
+        return {
+            "valid":   True,
+            "message": f"Access Granted: {pu_data.get('location', sb_officer.get('polling_unit', ''))}",
+            **pu_data,
+        }
+
+    # ── 2. Fallback: check polling_units SQLite table ─────────────────────────
     try:
         parts = officer_id.split("-", 1)
         if len(parts) != 2:
@@ -481,14 +706,14 @@ def validate_officer(officer_id: str, request: Request, lg: str = ""):
                 row = cur.fetchone()
                 if row:
                     return {
-                        "valid": True,
-                        "message": f"Access Granted: {row['location']}",
-                        "state": row["state"] or "osun",
-                        "ward": row["ward"],
-                        "lg": row["lg"],
-                        "location": row["location"],
-                        "pu_code": row["pu_code"],
-                        "ward_code": row["ward_code"]
+                        "valid":     True,
+                        "message":   f"Access Granted: {row['location']}",
+                        "state":     row["state"] or "osun",
+                        "ward":      row["ward"],
+                        "lg":        row["lg"],
+                        "location":  row["location"],
+                        "pu_code":   row["pu_code"],
+                        "ward_code": row["ward_code"],
                     }
                 else:
                     return {"valid": False, "message": "Officer ID not found in selected LGA. Check your LGA and ID."}
@@ -809,6 +1034,7 @@ async def request_otp(request: Request):
     """
     Step 1 of officer auth.
     Body: { "officer_id": "WARDCODE-PUCODE", "lg": "Osogbo" }
+    Looks up phone from Supabase first, then falls back to polling_units SQLite.
     Returns: { "status": "sent", "phone_hint": "+234***4567" }
              or { "status": "no_phone", "message": "..." }
     """
@@ -832,8 +1058,8 @@ async def request_otp(request: Request):
     ward_code, pu_code = parts[0].strip(), parts[1].strip()
 
     # Check lockout — key includes LGA to prevent cross-LGA lockout bleed
-    otp_key = f"{officer_id}|{lg.lower()}"
-    entry = _OTP_STORE.get(otp_key, {})
+    otp_key      = f"{officer_id}|{lg.lower()}"
+    entry        = _OTP_STORE.get(otp_key, {})
     locked_until = entry.get("locked_until", 0)
     if time.time() < locked_until:
         remaining = int(locked_until - time.time())
@@ -842,58 +1068,91 @@ async def request_otp(request: Request):
             detail=f"Too many failed attempts. Try again in {remaining // 60}m {remaining % 60}s."
         )
 
-    # Fetch officer record — must match ward_code + pu_code + lg
-    with get_db() as conn:
-        with conn.cursor() as cur:
-            cur.execute(
-                """SELECT ward, lg, location, pu_code, ward_code, state, officer_phone
-                   FROM polling_units
-                   WHERE ward_code = ? AND pu_code = ?
-                   AND LOWER(state) = 'osun'
-                   AND LOWER(lg) = LOWER(?)
-                   LIMIT 1""",
-                (ward_code, pu_code, lg)
-            )
-            row = cur.fetchone()
+    # ── Resolve phone + PU data: Supabase first, SQLite fallback ─────────────
+    phone   = None
+    pu_data = {}
 
-    if not row:
-        raise HTTPException(status_code=404, detail="Officer ID not found. Access Denied.")
+    sb_officer = _get_supabase_officer(officer_id, lg)
+    if sb_officer:
+        phone = _clean_phone(sb_officer.get("phone", "") or "")
+        # Enrich pu_data from SQLite polling_units if available
+        try:
+            with get_db() as conn:
+                with conn.cursor() as cur:
+                    cur.execute(
+                        """SELECT ward, lg, location, pu_code, ward_code, state
+                           FROM polling_units
+                           WHERE ward_code = ? AND pu_code = ?
+                           AND LOWER(state) = 'osun' AND LOWER(lg) = LOWER(?)
+                           LIMIT 1""",
+                        (ward_code, pu_code, lg)
+                    )
+                    row = cur.fetchone()
+                    if row:
+                        pu_data = {
+                            "state":     row["state"] or "osun",
+                            "ward":      row["ward"],
+                            "lg":        row["lg"],
+                            "location":  row["location"],
+                            "pu_code":   row["pu_code"],
+                            "ward_code": row["ward_code"],
+                        }
+        except Exception:
+            pass
+        if not pu_data:
+            pu_data = {
+                "state":     "osun",
+                "ward":      sb_officer.get("ward", ""),
+                "lg":        sb_officer.get("lga", lg),
+                "location":  sb_officer.get("polling_unit", ""),
+                "pu_code":   pu_code,
+                "ward_code": ward_code,
+            }
+    else:
+        # Fallback: check polling_units SQLite table
+        with get_db() as conn:
+            with conn.cursor() as cur:
+                cur.execute(
+                    """SELECT ward, lg, location, pu_code, ward_code, state, officer_phone
+                       FROM polling_units
+                       WHERE ward_code = ? AND pu_code = ?
+                       AND LOWER(state) = 'osun'
+                       AND LOWER(lg) = LOWER(?)
+                       LIMIT 1""",
+                    (ward_code, pu_code, lg)
+                )
+                row = cur.fetchone()
 
-    phone = row["officer_phone"] if row["officer_phone"] else None
-    if not phone:
-        # No phone on file — return special status so UI can show message
-        return {
-            "status": "no_phone",
-            "message": "No phone number registered for this officer ID. Contact your supervisor."
+        if not row:
+            raise HTTPException(status_code=404, detail="Officer ID not found. Access Denied.")
+
+        phone = _clean_phone(row["officer_phone"] or "") if row["officer_phone"] else None
+        pu_data = {
+            "state":     row["state"] or "osun",
+            "ward":      row["ward"],
+            "lg":        row["lg"],
+            "location":  row["location"],
+            "pu_code":   row["pu_code"],
+            "ward_code": row["ward_code"],
         }
 
-    # Normalize to E.164 before sending — phones may be stored as 0812... or 234812...
-    phone = _clean_phone(phone)
-    if len(phone) < 10:
+    if not phone or len(phone) < 10:
         return {
-            "status": "no_phone",
-            "message": "Phone number on file is invalid. Contact your supervisor."
+            "status":  "no_phone",
+            "message": "No phone number registered for this officer ID. Contact your supervisor."
         }
 
     # Generate OTP and store
     otp = _generate_otp()
     _OTP_STORE[otp_key] = {
-        "otp": otp,
-        "expiry": time.time() + _OTP_TTL,
-        "phone_hint": _mask_phone(phone),
-        "phone": phone,
-        "used": False,
-        "attempts": 0,
+        "otp":          otp,
+        "expiry":       time.time() + _OTP_TTL,
+        "phone_hint":   _mask_phone(phone),
+        "phone":        phone,
+        "used":         False,
+        "attempts":     0,
         "locked_until": 0,
-        # Cache PU data so verify-otp can return it without another DB hit
-        "pu_data": {
-            "state": row["state"] or "osun",
-            "ward": row["ward"],
-            "lg": row["lg"],
-            "location": row["location"],
-            "pu_code": row["pu_code"],
-            "ward_code": row["ward_code"],
-        }
+        "pu_data":      pu_data,
     }
 
     # Send via Twilio WhatsApp
@@ -932,7 +1191,6 @@ async def request_otp(request: Request):
             )
             logger.info(f"✅ OTP sent to {_mask_phone(phone)} for officer {officer_id}")
         except Exception as e:
-            # Surface the real Twilio error — critical for diagnosing send failures
             twilio_msg = str(e)
             logger.error(f"Twilio OTP send failed for {officer_id}: {twilio_msg}", exc_info=True)
             raise HTTPException(
@@ -941,7 +1199,7 @@ async def request_otp(request: Request):
             )
 
     return {
-        "status": "sent",
+        "status":     "sent",
         "phone_hint": _mask_phone(phone)
     }
 
