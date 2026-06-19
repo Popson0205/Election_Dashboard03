@@ -18,7 +18,7 @@ from collections import defaultdict
 import psycopg2
 
 conn = psycopg2.connect(
-    host="db.fzsqoemnjnkbvkmyhpwr.supabase.co",
+    host="https://fzsqoemnjnkbvkmyhpwr.supabase.co",
     database="postgres",
     user="postgres",
     password="Popson0205@",
