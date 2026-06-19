@@ -6,3 +6,4 @@ cloudinary
 openpyxl
 twilio
 supabase
+psycopg2-binary
