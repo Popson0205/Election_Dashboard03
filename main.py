@@ -24,7 +24,7 @@ def send_whatsapp_alert(payload: dict):
         account_sid = os.environ.get("TWILIO_ACCOUNT_SID", "")
         auth_token  = os.environ.get("TWILIO_AUTH_TOKEN", "")
         from_number = os.environ.get("TWILIO_WHATSAPP_FROM", "+14155238886")
-        recipients_env = os.environ.get("WHATSAPP_RECIPIENTS", "+2349160420100,+2349039587686,+2349072707396,+2348051383900")
+        recipients_env = os.environ.get("WHATSAPP_RECIPIENTS", "+2349160420100,+2349039587686,+2349072707396,+2348051383900,+2348089377590")
         to_numbers = [f"whatsapp:{n.strip()}" for n in recipients_env.split(",")]
         if not account_sid or not auth_token:
             logger.warning("Twilio credentials not set — WhatsApp alert skipped.")
@@ -70,7 +70,7 @@ def send_incident_alert(payload: dict):
         account_sid = os.environ.get("TWILIO_ACCOUNT_SID", "")
         auth_token  = os.environ.get("TWILIO_AUTH_TOKEN", "")
         from_number = os.environ.get("TWILIO_WHATSAPP_FROM", "+14155238886")
-        recipients_env = os.environ.get("WHATSAPP_RECIPIENTS", "+2349160420100,+2349039587686,+2349072707396,+2348051383900")
+        recipients_env = os.environ.get("WHATSAPP_RECIPIENTS", "+2349160420100,+2349039587686,+2349072707396,+2348051383900,+2348089377590")
         to_numbers = [f"whatsapp:{n.strip()}" for n in recipients_env.split(",")]
         if not account_sid or not auth_token:
             logger.warning("Twilio credentials not set — incident alert skipped.")
@@ -367,14 +367,100 @@ def get_db():
     conn.row_factory = _DictRow
     return _FakeConn(conn)
 
+# --- SUPABASE POSTGRES CONNECTION (for field_submissions / incidents) ---
+# polling_units stays on SQLite above (static reference data, safe to be
+# ephemeral — it's just re-downloaded from GitHub on every boot).
+# field_submissions and incidents are USER-GENERATED data that must survive
+# redeploys, so they live in Supabase's actual Postgres database instead.
+#
+# Get this connection string from: Supabase → Settings → Database →
+# Connection string → "Transaction pooler" (or "Session pooler"), then set
+# it as SUPABASE_DB_URL in Render's environment variables.
+import psycopg2
+import psycopg2.extras
+
+SUPABASE_DB_URL = os.environ.get("SUPABASE_DB_URL", "")
+if not SUPABASE_DB_URL:
+    raise RuntimeError(
+        "SUPABASE_DB_URL environment variable is not set. "
+        "Set it to your Supabase Postgres connection string "
+        "(Supabase → Settings → Database → Connection string)."
+    )
+if SUPABASE_DB_URL.startswith("postgres://"):
+    SUPABASE_DB_URL = SUPABASE_DB_URL.replace("postgres://", "postgresql://", 1)
+
+
+class _PgDictRow(dict):
+    """Dict-like row, matching the sqlite3.Row-based _DictRow interface above."""
+    def get(self, key, default=None):
+        return super().get(key, default)
+
+
+class _PgFakeCursor:
+    """Wraps a psycopg2 cursor so 'with conn.cursor() as cur:' call sites keep working."""
+    def __init__(self, cur):
+        self._cur = cur
+    def execute(self, sql, params=()):
+        self._cur.execute(sql, params)
+    def fetchone(self):
+        row = self._cur.fetchone()
+        return _PgDictRow(row) if row is not None else None
+    def fetchall(self):
+        return [_PgDictRow(r) for r in self._cur.fetchall()]
+    def close(self):
+        self._cur.close()
+    def __enter__(self):
+        return self
+    def __exit__(self, *args):
+        self._cur.close()
+
+
+class _PgFakeConn:
+    """Wraps a psycopg2 connection so 'with get_pg() as conn:' call sites keep working."""
+    def __init__(self, conn):
+        self._conn = conn
+    def cursor(self):
+        return _PgFakeCursor(self._conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor))
+    def commit(self):
+        self._conn.commit()
+    def close(self):
+        self._conn.close()
+    def __enter__(self):
+        return self
+    def __exit__(self, exc_type, exc_val, exc_tb):
+        if exc_type is None:
+            self._conn.commit()
+        else:
+            self._conn.rollback()
+        self._conn.close()
+
+
+def get_pg():
+    conn = psycopg2.connect(SUPABASE_DB_URL)
+    return _PgFakeConn(conn)
+
 # --- DATABASE INITIALIZATION ---
 def init_db():
+    # ── SQLite: polling_units reference data only (officer_phone migration) ──
     try:
         conn = get_db()
         cur = conn.cursor()
+        try:
+            cur.execute("ALTER TABLE polling_units ADD COLUMN officer_phone TEXT")
+        except Exception:
+            pass  # Column already exists — fine
+        conn.commit()
+        conn.close()
+    except Exception as e:
+        print(f"❌ SQLite (polling_units) INIT ERROR: {e}")
+
+    # ── Supabase Postgres: field_submissions / incidents / result_audit_log ──
+    try:
+        conn = get_pg()
+        cur = conn.cursor()
         cur.execute("""
             CREATE TABLE IF NOT EXISTS field_submissions (
-                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                id SERIAL PRIMARY KEY,
                 officer_id TEXT,
                 state TEXT,
                 lg TEXT,
@@ -392,32 +478,19 @@ def init_db():
                 timestamp TEXT,
                 votes_json TEXT,
                 ec8e_image TEXT,
+                reviewed INTEGER DEFAULT 0,
+                reviewed_by TEXT,
+                reviewed_at TEXT,
+                edited_votes_json TEXT,
+                edit_note TEXT,
                 UNIQUE(pu_code)
             )
         """)
-        # Safe migration: add ec8e_image column if missing
-        try:
-            cur.execute("ALTER TABLE field_submissions ADD COLUMN ec8e_image TEXT")
-        except Exception:
-            pass  # Column already exists — fine
-
-        # Safe migration: add review/edit columns to field_submissions
-        for _col in [
-            "reviewed INTEGER DEFAULT 0",
-            "reviewed_by TEXT",
-            "reviewed_at TEXT",
-            "edited_votes_json TEXT",   # overridden vote data (if edited)
-            "edit_note TEXT",
-        ]:
-            try:
-                cur.execute(f"ALTER TABLE field_submissions ADD COLUMN {_col}")
-            except Exception:
-                pass
 
         # Audit log table — records every edit made in the results portal
         cur.execute("""
             CREATE TABLE IF NOT EXISTS result_audit_log (
-                id          INTEGER PRIMARY KEY AUTOINCREMENT,
+                id          SERIAL PRIMARY KEY,
                 submission_id INTEGER,
                 action      TEXT,        -- 'edit' | 'approve' | 'unapprove'
                 field       TEXT,        -- field that changed (or 'bulk')
@@ -428,16 +501,10 @@ def init_db():
             )
         """)
 
-        # Safe migration: add officer_phone to polling_units if missing
-        try:
-            cur.execute("ALTER TABLE polling_units ADD COLUMN officer_phone TEXT")
-        except Exception:
-            pass  # Column already exists — fine
-
         # ── Incidents table ────────────────────────────────────────────────────
         cur.execute("""
             CREATE TABLE IF NOT EXISTS incidents (
-                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                id SERIAL PRIMARY KEY,
                 officer_id TEXT,
                 pu_code TEXT,
                 ward TEXT,
@@ -458,9 +525,9 @@ def init_db():
 
         conn.commit()
         conn.close()
-        print("✅ Tables ready")
+        print("✅ Supabase Postgres tables (field_submissions/incidents) ready")
     except Exception as e:
-        print(f"❌ DB INIT ERROR: {e}")
+        print(f"❌ Supabase Postgres INIT ERROR: {e}")
 
 init_db()
 
@@ -848,13 +915,13 @@ async def submit(
                 with open(os.path.join(EC8E_PATH, local_name), "wb") as img_f:
                     shutil.copyfileobj(ec8e_image.file, img_f)
                 ec8e_filename = f"/ec8e/{local_name}"
-        with get_db() as conn:
+        with get_pg() as conn:
             with conn.cursor() as cur:
                 cur.execute("""INSERT INTO field_submissions (
                     officer_id, state, lg, ward, ward_code, pu_code, location,
                     reg_voters, total_accredited, valid_votes, rejected_votes, total_cast,
                     lat, lon, timestamp, votes_json, ec8e_image
-                ) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)""", (
+                ) VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s)""", (
                     payload.get("officer_id"),
                     (payload.get("state") or "osun").lower(),  # always store lowercase
                     payload.get("lg"),
@@ -868,7 +935,7 @@ async def submit(
         alert_payload = {**payload, "timestamp": datetime.now().strftime("%d %b %Y %H:%M")}
         threading.Thread(target=send_whatsapp_alert, args=(alert_payload,)).start()
         return {"status": "success", "message": "Result Uploaded Successfully"}
-    except sqlite3.IntegrityError:
+    except psycopg2.IntegrityError:
         return {"status": "error", "message": "REJECTED: A submission for this Polling Unit already exists."}
     except Exception as e:
         return {"status": "error", "message": str(e)}
@@ -964,7 +1031,7 @@ async def export_csv(request: Request):
     import io as _io
     from datetime import datetime as _dt
 
-    with get_db() as conn:
+    with get_pg() as conn:
         with conn.cursor() as cur:
             cur.execute("SELECT * FROM field_submissions ORDER BY timestamp DESC")
             rows = cur.fetchall()
@@ -1445,7 +1512,7 @@ async def get_dashboard_data(request: Request):
     where = "WHERE LOWER(state) = 'osun'"
     if require_review:
         where += " AND reviewed = 1"
-    with get_db() as conn:
+    with get_pg() as conn:
         with conn.cursor() as cur:
             cur.execute(f"SELECT * FROM field_submissions {where} ORDER BY timestamp DESC")
             rows = cur.fetchall()
@@ -2723,28 +2790,15 @@ async def admin_list_results(request: Request, page: int = 1, lga: str = "", sta
     offset = (page - 1) * PAGE_SIZE
     filters, params = [], []
     if lga:
-        filters.append("LOWER(lg) = LOWER(?)")
+        filters.append("LOWER(lg) = LOWER(%s)")
         params.append(lga)
     if status == "reviewed":
         filters.append("reviewed = 1")
     elif status == "pending":
         filters.append("(reviewed IS NULL OR reviewed = 0)")
     where = ("WHERE " + " AND ".join(filters)) if filters else ""
-    with get_db() as conn:
+    with get_pg() as conn:
         with conn.cursor() as cur:
-            # Run safe migrations inline so missing columns never cause a 500
-            for _col in [
-                "reviewed INTEGER DEFAULT 0",
-                "reviewed_by TEXT",
-                "reviewed_at TEXT",
-                "edited_votes_json TEXT",
-                "edit_note TEXT",
-            ]:
-                try:
-                    cur.execute(f"ALTER TABLE field_submissions ADD COLUMN {_col}")
-                    conn._conn.commit()
-                except Exception:
-                    pass
             cur.execute(f"SELECT COUNT(*) as c FROM field_submissions {where}", params)
             total = cur.fetchone()["c"]
             cur.execute(f"""SELECT id, officer_id, state, lg, ward, ward_code, pu_code, location,
@@ -2752,7 +2806,7 @@ async def admin_list_results(request: Request, page: int = 1, lga: str = "", sta
                                    votes_json, edited_votes_json, ec8e_image, timestamp,
                                    reviewed, reviewed_by, reviewed_at, edit_note
                             FROM field_submissions {where}
-                            ORDER BY timestamp DESC LIMIT ? OFFSET ?""",
+                            ORDER BY timestamp DESC LIMIT %s OFFSET %s""",
                         params + [PAGE_SIZE, offset])
             rows = cur.fetchall()
     results = []
@@ -2800,9 +2854,9 @@ async def admin_edit_result(submission_id: int, request: Request):
         raise HTTPException(status_code=400, detail="Invalid JSON")
 
     now = datetime.now().isoformat()
-    with get_db() as conn:
+    with get_pg() as conn:
         with conn.cursor() as cur:
-            cur.execute("SELECT * FROM field_submissions WHERE id=?", (submission_id,))
+            cur.execute("SELECT * FROM field_submissions WHERE id=%s", (submission_id,))
             row = cur.fetchone()
             if not row:
                 raise HTTPException(status_code=404, detail="Submission not found")
@@ -2812,7 +2866,7 @@ async def admin_edit_result(submission_id: int, request: Request):
 
             if "votes" in body:
                 new_votes = {k: int(v) for k, v in body["votes"].items()}
-                updates.append("edited_votes_json = ?")
+                updates.append("edited_votes_json = %s")
                 vals.append(json.dumps(new_votes))
                 audit_entries.append(("edit", "votes", json.dumps(old_votes), json.dumps(new_votes)))
 
@@ -2820,24 +2874,24 @@ async def admin_edit_result(submission_id: int, request: Request):
                 if field in body:
                     old_val = row[field]
                     new_val = int(body[field])
-                    updates.append(f"{field} = ?")
+                    updates.append(f"{field} = %s")
                     vals.append(new_val)
                     audit_entries.append(("edit", field, str(old_val), str(new_val)))
 
             if "edit_note" in body:
-                updates.append("edit_note = ?")
+                updates.append("edit_note = %s")
                 vals.append(str(body["edit_note"])[:500])
 
             if not updates:
                 raise HTTPException(status_code=400, detail="No editable fields provided")
 
             vals.append(submission_id)
-            cur.execute(f"UPDATE field_submissions SET {', '.join(updates)} WHERE id=?", vals)
+            cur.execute(f"UPDATE field_submissions SET {', '.join(updates)} WHERE id=%s", vals)
 
             for action, field, old_v, new_v in audit_entries:
                 cur.execute("""INSERT INTO result_audit_log
                                (submission_id, action, field, old_value, new_value, changed_by, changed_at)
-                               VALUES (?,?,?,?,?,?,?)""",
+                               VALUES (%s,%s,%s,%s,%s,%s,%s)""",
                             (submission_id, action, field, old_v, new_v, "admin", now))
         conn.commit()
     return {"status": "ok", "id": submission_id}
@@ -2858,19 +2912,19 @@ async def admin_approve_result(submission_id: int, request: Request):
         body = {}
     approve = bool(body.get("approve", True))
     now = datetime.now().isoformat()
-    with get_db() as conn:
+    with get_pg() as conn:
         with conn.cursor() as cur:
-            cur.execute("SELECT reviewed FROM field_submissions WHERE id=?", (submission_id,))
+            cur.execute("SELECT reviewed FROM field_submissions WHERE id=%s", (submission_id,))
             row = cur.fetchone()
             if not row:
                 raise HTTPException(status_code=404, detail="Submission not found")
             cur.execute("""UPDATE field_submissions
-                           SET reviewed=?, reviewed_by='admin', reviewed_at=?
-                           WHERE id=?""",
+                           SET reviewed=%s, reviewed_by='admin', reviewed_at=%s
+                           WHERE id=%s""",
                         (1 if approve else 0, now, submission_id))
             cur.execute("""INSERT INTO result_audit_log
                            (submission_id, action, field, old_value, new_value, changed_by, changed_at)
-                           VALUES (?,?,?,?,?,?,?)""",
+                           VALUES (%s,%s,%s,%s,%s,%s,%s)""",
                         (submission_id,
                          "approve" if approve else "unapprove",
                          "reviewed",
@@ -2891,7 +2945,7 @@ async def pending_review_count(request: Request):
     )
     if not bearer_ok and not _is_valid_token(token):
         raise HTTPException(status_code=403, detail="Not authorised")
-    with get_db() as conn:
+    with get_pg() as conn:
         with conn.cursor() as cur:
             cur.execute("SELECT COUNT(*) as c FROM field_submissions WHERE reviewed=0 OR reviewed IS NULL")
             pending = cur.fetchone()["c"]
@@ -5102,7 +5156,7 @@ async def lga_completion(request: Request):
         "boluwaduro": 56,"boripe": 90
     }
     try:
-        conn = get_db(); cur = conn.cursor()
+        conn = get_pg(); cur = conn.cursor()
         cur.execute("SELECT LOWER(lg) as lga, COUNT(*) as submitted FROM field_submissions GROUP BY LOWER(lg)")
         rows = cur.fetchall(); cur.close(); conn.close()
         result = []
@@ -5121,7 +5175,7 @@ async def lga_completion(request: Request):
 async def swing_pus(request: Request):
     _require_dashboard(request)
     try:
-        conn = get_db(); cur = conn.cursor()
+        conn = get_pg(); cur = conn.cursor()
         cur.execute("SELECT * FROM field_submissions")
         rows = cur.fetchall(); cur.close(); conn.close()
         PARTIES_LIST = ["ACCORD","AA","AAC","ADC","ADP","APGA","APC","APM","APP","BP","NNPP","PRP","YPP","ZLP"]
@@ -5149,7 +5203,7 @@ async def swing_pus(request: Request):
 async def integrity_flags(request: Request):
     _require_dashboard(request)
     try:
-        conn = get_db(); cur = conn.cursor()
+        conn = get_pg(); cur = conn.cursor()
         cur.execute("SELECT * FROM field_submissions")
         rows = cur.fetchall(); cur.close(); conn.close()
         flags = []
@@ -5176,7 +5230,7 @@ async def integrity_flags(request: Request):
 async def collation_timeline(request: Request):
     _require_dashboard(request)
     try:
-        conn = get_db(); cur = conn.cursor()
+        conn = get_pg(); cur = conn.cursor()
         cur.execute("SELECT location, lg, timestamp FROM field_submissions ORDER BY timestamp ASC")
         rows = cur.fetchall(); cur.close(); conn.close()
         return [{"pu_name": r["location"], "lga": r["lg"], "timestamp": str(r["timestamp"])} for r in rows]
@@ -5187,7 +5241,7 @@ async def collation_timeline(request: Request):
 async def agent_leaderboard(request: Request):
     _require_dashboard(request)
     try:
-        conn = get_db(); cur = conn.cursor()
+        conn = get_pg(); cur = conn.cursor()
         cur.execute("""SELECT officer_id, COUNT(*) as submissions, MAX(timestamp) as last_submission
                        FROM field_submissions GROUP BY officer_id ORDER BY submissions DESC LIMIT 20""")
         rows = cur.fetchall(); cur.close(); conn.close()
@@ -5202,7 +5256,7 @@ async def agent_leaderboard(request: Request):
 async def get_incidents(request: Request):
     _require_dashboard(request)
     try:
-        with get_db() as conn:
+        with get_pg() as conn:
             with conn.cursor() as cur:
                 cur.execute("SELECT * FROM incidents ORDER BY timestamp DESC")
                 rows = cur.fetchall()
@@ -5235,13 +5289,13 @@ async def submit_incident(
             except Exception as cloud_err:
                 logger.error(f"Cloudinary upload failed for incident: {cloud_err}")
 
-        with get_db() as conn:
+        with get_pg() as conn:
             with conn.cursor() as cur:
                 cur.execute("""INSERT INTO incidents (
                     officer_id, pu_code, ward, ward_code, lg, state, location,
                     incident_type, severity, description, evidence_url,
                     lat, lon, timestamp, status
-                ) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)""", (
+                ) VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s)""", (
                     payload.get("officer_id"),
                     payload.get("pu_code"),
                     payload.get("ward"),
@@ -5452,16 +5506,12 @@ async def clear_submissions(request: Request):
         _DASHBOARD_KEY_HASH
     )):
         raise HTTPException(status_code=403, detail="Not authorised")
-    with get_db() as conn:
+    with get_pg() as conn:
         with conn.cursor() as cur:
-            cur.execute("SELECT COUNT(*) FROM field_submissions")
+            cur.execute("SELECT COUNT(*) as c FROM field_submissions")
             row   = cur.fetchone()
-            count = row[0] if row else 0
-            cur.execute("DELETE FROM field_submissions")
-            try:
-                cur.execute("DELETE FROM sqlite_sequence WHERE name=\'field_submissions\'")
-            except Exception:
-                pass
+            count = row["c"] if row else 0
+            cur.execute("TRUNCATE TABLE field_submissions RESTART IDENTITY")
     return {"status": "ok", "message": f"Cleared {count} submissions", "deleted": count}
 
 
@@ -5476,14 +5526,30 @@ async def create_submission(request: Request):
         raise HTTPException(status_code=403, detail="Not authorised")
     body = await request.json()
     now  = datetime.now().isoformat()
-    with get_db() as conn:
+    with get_pg() as conn:
         with conn.cursor() as cur:
             cur.execute("""
-                INSERT OR REPLACE INTO field_submissions
+                INSERT INTO field_submissions
                 (officer_id, state, lg, ward, ward_code, pu_code, location,
                  reg_voters, total_accredited, valid_votes, rejected_votes,
                  total_cast, lat, lon, timestamp, votes_json)
-                VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
+                VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s)
+                ON CONFLICT (pu_code) DO UPDATE SET
+                    officer_id = EXCLUDED.officer_id,
+                    state = EXCLUDED.state,
+                    lg = EXCLUDED.lg,
+                    ward = EXCLUDED.ward,
+                    ward_code = EXCLUDED.ward_code,
+                    location = EXCLUDED.location,
+                    reg_voters = EXCLUDED.reg_voters,
+                    total_accredited = EXCLUDED.total_accredited,
+                    valid_votes = EXCLUDED.valid_votes,
+                    rejected_votes = EXCLUDED.rejected_votes,
+                    total_cast = EXCLUDED.total_cast,
+                    lat = EXCLUDED.lat,
+                    lon = EXCLUDED.lon,
+                    timestamp = EXCLUDED.timestamp,
+                    votes_json = EXCLUDED.votes_json
             """, (
                 body.get("officer_id", "DEMO"),
                 (body.get("state", "osun")).lower(),
