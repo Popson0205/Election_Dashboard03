@@ -4051,6 +4051,218 @@ async def vote_form():
 """
 
 
+
+# ── Incident Report OTP (no LGA required — officer ID lookup only) ─────────────
+@app.post("/api/request-incident-otp")
+async def request_incident_otp(request: Request):
+    """
+    Same as /api/request-otp but without requiring LGA.
+    Looks up officer in Supabase first (by officer_id only), then SQLite (without LGA filter).
+    Used by the Incident Report form so officers don't need to select their LGA.
+    """
+    _check_rate_limit(request.client.host)
+    try:
+        body = await request.json()
+    except Exception:
+        raise HTTPException(status_code=400, detail="Invalid JSON")
+
+    officer_id = str(body.get("officer_id", "")).strip()[:60]
+    import re as _re_inc
+    officer_id = _re_inc.sub(r"[^A-Za-z0-9\-/_ ]", "", officer_id)
+
+    parts = officer_id.split("-", 1)
+    if len(parts) != 2:
+        raise HTTPException(status_code=400, detail="Invalid officer ID format. Expected: WARDCODE-PUCODE")
+    ward_code, pu_code = parts[0].strip(), parts[1].strip()
+
+    # Lockout check (no LGA in key for incidents)
+    otp_key = f"incident|{officer_id}"
+    entry = _OTP_STORE.get(otp_key, {})
+    locked_until = entry.get("locked_until", 0)
+    if time.time() < locked_until:
+        remaining = int(locked_until - time.time())
+        raise HTTPException(
+            status_code=429,
+            detail=f"Too many failed attempts. Try again in {remaining // 60}m {remaining % 60}s."
+        )
+
+    phone = None
+    pu_data = {}
+
+    # ── 1. Try Supabase (no LGA filter) ──────────────────────────────────────
+    sb_officer = _get_supabase_officer(officer_id, "")  # empty lg = no filter
+    if sb_officer:
+        phone = _clean_phone(sb_officer.get("phone", "") or "")
+        lg = sb_officer.get("lga", "")
+        try:
+            with get_db() as conn:
+                with conn.cursor() as cur:
+                    cur.execute(
+                        """SELECT ward, lg, location, pu_code, ward_code, state
+                           FROM polling_units
+                           WHERE ward_code = ? AND pu_code = ?
+                           AND LOWER(state) = 'osun'
+                           LIMIT 1""",
+                        (ward_code, pu_code)
+                    )
+                    row = cur.fetchone()
+                    if row:
+                        pu_data = {
+                            "state":     row["state"] or "osun",
+                            "ward":      row["ward"],
+                            "lg":        row["lg"],
+                            "location":  row["location"],
+                            "pu_code":   row["pu_code"],
+                            "ward_code": row["ward_code"],
+                        }
+        except Exception:
+            pass
+        if not pu_data:
+            pu_data = {
+                "state":     "osun",
+                "ward":      sb_officer.get("ward", ""),
+                "lg":        lg,
+                "location":  sb_officer.get("polling_unit", ""),
+                "pu_code":   pu_code,
+                "ward_code": ward_code,
+            }
+    else:
+        # ── 2. Fallback: SQLite polling_units (no LGA filter) ─────────────────
+        with get_db() as conn:
+            with conn.cursor() as cur:
+                cur.execute(
+                    """SELECT ward, lg, location, pu_code, ward_code, state, officer_phone
+                       FROM polling_units
+                       WHERE ward_code = ? AND pu_code = ?
+                       AND LOWER(state) = 'osun'
+                       LIMIT 1""",
+                    (ward_code, pu_code)
+                )
+                row = cur.fetchone()
+
+        if not row:
+            raise HTTPException(status_code=404, detail="Officer ID not found. Access Denied.")
+
+        phone = _clean_phone(row["officer_phone"] or "") if row["officer_phone"] else None
+        pu_data = {
+            "state":     row["state"] or "osun",
+            "ward":      row["ward"],
+            "lg":        row["lg"],
+            "location":  row["location"],
+            "pu_code":   row["pu_code"],
+            "ward_code": row["ward_code"],
+        }
+
+    if not phone or len(phone) < 10:
+        return {
+            "status":  "no_phone",
+            "message": "No phone number registered for this officer ID. Contact your supervisor."
+        }
+
+    # Generate & store OTP
+    otp = _generate_otp()
+    _OTP_STORE[otp_key] = {
+        "otp":          otp,
+        "expiry":       time.time() + _OTP_TTL,
+        "phone_hint":   _mask_phone(phone),
+        "phone":        phone,
+        "used":         False,
+        "attempts":     0,
+        "locked_until": 0,
+        "pu_data":      pu_data,
+    }
+
+    # Send via Twilio WhatsApp
+    account_sid = os.environ.get("TWILIO_ACCOUNT_SID", "")
+    auth_token  = os.environ.get("TWILIO_AUTH_TOKEN", "")
+    from_number = os.environ.get("TWILIO_WHATSAPP_FROM", "+14155238886")
+
+    if not account_sid or not auth_token:
+        dev_mode = os.environ.get("OTP_DEV_MODE", "").lower() in ("1", "true", "yes")
+        if dev_mode:
+            logger.warning("Twilio not configured — OTP not sent (dev mode)")
+            logger.info(f"[DEV OTP] {officer_id}: {otp}")
+        else:
+            raise HTTPException(status_code=503, detail="OTP service is not configured. Contact your administrator.")
+    else:
+        try:
+            from twilio.rest import Client as _TC2
+            client = _TC2(account_sid, auth_token)
+            msg = (
+                f"🚨 *ACCORD INCIDENT REPORTING*\n"
+                f"━━━━━━━━━━━━━━━━━━\n"
+                f"Your One-Time Password:\n\n"
+                f"*{otp}*\n\n"
+                f"Valid for *5 minutes*. Do NOT share this code.\n"
+                f"━━━━━━━━━━━━━━━━━━\n"
+                f"_Powered by Popson Geospatial Services_"
+            )
+            client.messages.create(from_=f"whatsapp:{from_number}", to=f"whatsapp:{phone}", body=msg)
+            logger.info(f"✅ Incident OTP sent to {_mask_phone(phone)} for officer {officer_id}")
+        except Exception as e:
+            logger.error(f"Twilio OTP send failed for {officer_id}: {e}", exc_info=True)
+            raise HTTPException(status_code=500, detail=f"Failed to send OTP: {str(e)}")
+
+    return {"status": "sent", "phone_hint": _mask_phone(phone)}
+
+
+@app.post("/api/verify-incident-otp")
+async def verify_incident_otp(request: Request):
+    """
+    Verify OTP for incident reporting. Returns officer/PU data on success.
+    No submit token required — incident form uses its own payload submission.
+    """
+    _check_rate_limit(request.client.host)
+    try:
+        body = await request.json()
+    except Exception:
+        raise HTTPException(status_code=400, detail="Invalid JSON")
+
+    officer_id = str(body.get("officer_id", "")).strip()[:60]
+    import re as _re_inc2
+    officer_id = _re_inc2.sub(r"[^A-Za-z0-9\-/_ ]", "", officer_id)
+    given_otp  = str(body.get("otp", "")).strip()[:6]
+
+    otp_key = f"incident|{officer_id}"
+    entry   = _OTP_STORE.get(otp_key)
+
+    if not entry:
+        raise HTTPException(status_code=400, detail="No OTP requested for this officer. Start again.")
+
+    if time.time() < entry.get("locked_until", 0):
+        remaining = int(entry["locked_until"] - time.time())
+        raise HTTPException(status_code=429, detail=f"Account locked. Try again in {remaining // 60}m {remaining % 60}s.")
+
+    if entry.get("used"):
+        raise HTTPException(status_code=400, detail="OTP already used. Request a new one.")
+
+    if time.time() > entry["expiry"]:
+        _OTP_STORE.pop(otp_key, None)
+        raise HTTPException(status_code=400, detail="OTP expired. Request a new one.")
+
+    if not secrets.compare_digest(given_otp, entry["otp"]):
+        entry["attempts"] = entry.get("attempts", 0) + 1
+        remaining_tries = _OTP_MAX_TRIES - entry["attempts"]
+        if entry["attempts"] >= _OTP_MAX_TRIES:
+            entry["locked_until"] = time.time() + _OTP_LOCKOUT
+            entry["used"] = True
+            raise HTTPException(status_code=429, detail=f"Too many wrong attempts. Account locked for {_OTP_LOCKOUT // 60} minutes.")
+        raise HTTPException(status_code=401, detail=f"Incorrect OTP. {remaining_tries} attempt{'s' if remaining_tries != 1 else ''} remaining.")
+
+    # ✅ Correct OTP
+    entry["used"] = True
+    pu_data = entry["pu_data"]
+    return {
+        "status":    "ok",
+        "officer_id": officer_id,
+        "state":     pu_data["state"],
+        "ward":      pu_data["ward"],
+        "lg":        pu_data["lg"],
+        "location":  pu_data["location"],
+        "pu_code":   pu_data["pu_code"],
+        "ward_code": pu_data["ward_code"],
+    }
+
 # ── INCIDENT REPORT FORM ──────────────────────────────────────────────────────
 @app.get("/report", response_class=HTMLResponse)
 async def report_page():
@@ -4075,11 +4287,11 @@ REPORT_HTML = """
         .severity-btn.active-low { border-color: #28a745; background: #d4edda; }
         .severity-btn.active-medium { border-color: #ffc107; background: #fff3cd; }
         .severity-btn.active-critical { border-color: #dc3545; background: #f8d7da; }
-        #loginArea { margin-top: 100px; }
+        #step1Area, #step2Area { margin-top: 100px; }
         @media (max-width: 768px) {
             body { background-attachment: scroll; }
             .navbar h5 { font-size: 0.75rem; }
-            #loginArea { margin-top: 50px; }
+            #step1Area, #step2Area { margin-top: 50px; }
             .form-control, .form-select { min-height: 48px !important; font-size: 1rem !important; border-radius: 10px !important; }
             .btn-lg { min-height: 56px !important; font-size: 1.05rem !important; border-radius: 14px !important; }
         }
@@ -4089,21 +4301,42 @@ REPORT_HTML = """
 <nav class="navbar py-2 mb-4 text-center"><h5>⚠️ ACCORD INCIDENT REPORTING SYSTEM</h5></nav>
 <div class="container pb-5" style="max-width: 750px;">
 
-    <div id="loginArea" class="card p-5 text-center mx-auto" style="max-width: 400px;">
-        <h6 class="text-danger fw-bold">🔐 Officer Verification</h6>
-        <p class="small text-muted mb-3">Enter your Officer ID to report an incident</p>
-        <input type="text" id="oid" class="form-control mb-3 text-center" placeholder="WARDCODE-PUCODE">
-        <div id="loginError" class="alert alert-danger d-none small py-2 mb-2"></div>
-        <button class="btn btn-danger w-100 fw-bold" onclick="startReport()">Verify & Continue</button>
+    <!-- Step 1: Officer ID only (no LGA needed) -->
+    <div id="step1Area" class="card p-5 text-center mx-auto" style="max-width: 420px;">
+        <div style="width:56px;height:56px;border-radius:50%;background:rgba(180,0,0,0.1);border:1px solid rgba(180,0,0,0.3);display:flex;align-items:center;justify-content:center;font-size:1.4rem;margin:0 auto 16px;">🚨</div>
+        <div style="font-size:0.6rem;font-weight:700;letter-spacing:0.15em;color:#ff6600;background:rgba(255,102,0,0.1);border:1px solid rgba(255,102,0,0.2);border-radius:20px;padding:3px 12px;display:inline-block;margin-bottom:14px;text-transform:uppercase;">Step 1 of 2 — Officer Verification</div>
+        <h6 class="fw-bold mb-1 text-danger">🔐 Officer Verification</h6>
+        <p class="small text-muted mb-3">Enter your Officer ID to receive an OTP on WhatsApp</p>
+        <input type="text" id="oid" class="form-control mb-3 text-center fw-bold" placeholder="e.g. 10-001" autocomplete="off" style="letter-spacing:0.08em;" onkeydown="if(event.key==='Enter')requestOTP()">
+        <div id="step1Error" class="alert alert-danger d-none small py-2 mb-2"></div>
+        <button class="btn btn-danger w-100 fw-bold" id="step1Btn" onclick="requestOTP()">Send OTP to My WhatsApp →</button>
         <div class="mt-3">
             <a href="/vote" class="small text-muted">← Back to Vote Submission</a>
         </div>
     </div>
 
+    <!-- Step 2: OTP entry -->
+    <div id="step2Area" class="card p-5 text-center mx-auto d-none" style="max-width: 420px;">
+        <div style="width:56px;height:56px;border-radius:50%;background:rgba(180,0,0,0.1);border:1px solid rgba(180,0,0,0.3);display:flex;align-items:center;justify-content:center;font-size:1.4rem;margin:0 auto 16px;">📱</div>
+        <div style="font-size:0.6rem;font-weight:700;letter-spacing:0.15em;color:#ff6600;background:rgba(255,102,0,0.1);border:1px solid rgba(255,102,0,0.2);border-radius:20px;padding:3px 12px;display:inline-block;margin-bottom:14px;text-transform:uppercase;">Step 2 of 2 — OTP Verification</div>
+        <h6 class="fw-bold mb-1">Check Your WhatsApp</h6>
+        <p class="small text-muted mb-1">A 6-digit code was sent to</p>
+        <p class="fw-bold mb-3" id="phoneHintDisplay" style="color:#cc0000;font-size:1rem;letter-spacing:0.1em;">+234***0000</p>
+        <input type="text" id="otpInput" class="form-control mb-2 text-center fw-bold" placeholder="000000" maxlength="6" inputmode="numeric" autocomplete="one-time-code" style="font-size:1.4rem;letter-spacing:0.3em;" onkeydown="if(event.key==='Enter')verifyOTP()">
+        <div id="step2Error" class="alert alert-danger d-none small py-2 mb-2"></div>
+        <button class="btn btn-danger w-100 fw-bold mb-2" id="step2Btn" onclick="verifyOTP()">Verify OTP &amp; Unlock Form →</button>
+        <div class="d-flex justify-content-between align-items-center">
+            <button class="btn btn-link btn-sm text-muted p-0" onclick="backToStep1()">← Change ID</button>
+            <button class="btn btn-link btn-sm p-0" id="resendBtn" onclick="resendOTP()" style="color:#cc0000;">Resend OTP</button>
+        </div>
+        <div id="resendCountdown" class="small text-muted mt-1 d-none"></div>
+    </div>
+
+    <!-- Incident Form (shown after OTP verified) -->
     <div id="formArea" class="d-none">
 
         <div class="card p-4">
-            <span class="section-label">1. Officer & Location</span>
+            <span class="section-label">1. Officer &amp; Location</span>
             <div class="row g-2">
                 <div class="col-6"><small class="text-muted">Officer ID</small><input type="text" id="disp_officer" class="form-control" readonly></div>
                 <div class="col-6"><small class="text-muted">PU Code</small><input type="text" id="disp_pu" class="form-control" readonly></div>
@@ -4185,38 +4418,134 @@ REPORT_HTML = """
 
 <script src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/js/bootstrap.bundle.min.js"></script>
 <script>
-    let lat = null, lon = null, officerData = {};
+    let lat = null, lon = null, officerData = {}, _resendTimer = null;
 
-    async function startReport() {
-        const rawId = document.getElementById('oid').value.trim();
+    // ── Step 1: request OTP ──────────────────────────────────────────────────
+    async function requestOTP() {
+        const rawId = document.getElementById('oid').value.trim().toUpperCase();
         if (!rawId) return;
-        const btn = document.querySelector('#loginArea button');
-        const errEl = document.getElementById('loginError');
+        const btn   = document.getElementById('step1Btn');
+        const errEl = document.getElementById('step1Error');
+        btn.disabled = true; btn.innerText = 'Sending OTP...';
+        errEl.classList.add('d-none');
+        try {
+            const res = await fetch('/api/request-incident-otp', {
+                method: 'POST',
+                headers: {'Content-Type': 'application/json'},
+                body: JSON.stringify({ officer_id: rawId })
+            });
+            const out = await res.json();
+            if (!res.ok) {
+                errEl.innerText = out.detail || 'Error. Try again.';
+                errEl.classList.remove('d-none');
+                btn.disabled = false; btn.innerText = 'Send OTP to My WhatsApp →';
+                return;
+            }
+            if (out.status === 'no_phone') {
+                errEl.innerText = out.message;
+                errEl.classList.remove('d-none');
+                btn.disabled = false; btn.innerText = 'Send OTP to My WhatsApp →';
+                return;
+            }
+            // OTP sent — move to step 2
+            officerData.officer_id = rawId;
+            document.getElementById('phoneHintDisplay').innerText = out.phone_hint;
+            document.getElementById('step1Area').classList.add('d-none');
+            document.getElementById('step2Area').classList.remove('d-none');
+            document.getElementById('otpInput').focus();
+            startResendCountdown(60);
+        } catch(e) {
+            errEl.innerText = 'Server error. Try again.';
+            errEl.classList.remove('d-none');
+            btn.disabled = false; btn.innerText = 'Send OTP to My WhatsApp →';
+        }
+    }
+
+    // ── Step 2: verify OTP ───────────────────────────────────────────────────
+    async function verifyOTP() {
+        const otp   = document.getElementById('otpInput').value.trim();
+        if (!otp || otp.length !== 6) return;
+        const btn   = document.getElementById('step2Btn');
+        const errEl = document.getElementById('step2Error');
         btn.disabled = true; btn.innerText = 'Verifying...';
         errEl.classList.add('d-none');
         try {
-            const res = await fetch('/api/validate_officer/' + encodeURIComponent(rawId));
+            const res = await fetch('/api/verify-incident-otp', {
+                method: 'POST',
+                headers: {'Content-Type': 'application/json'},
+                body: JSON.stringify({ officer_id: officerData.officer_id, otp })
+            });
             const out = await res.json();
-            if (!out.valid) {
-                errEl.innerText = out.message;
+            if (!res.ok) {
+                errEl.innerText = out.detail || 'Incorrect OTP.';
                 errEl.classList.remove('d-none');
-                btn.disabled = false; btn.innerText = 'Verify & Continue';
+                btn.disabled = false; btn.innerText = 'Verify OTP & Unlock Form →';
                 return;
             }
-            officerData = out;
-            officerData.officer_id = rawId;
-            document.getElementById('disp_officer').value = rawId;
-            document.getElementById('disp_pu').value = out.pu_code || '';
-            document.getElementById('disp_loc').value = out.location || '';
-            document.getElementById('disp_ward').value = out.ward || '';
-            document.getElementById('disp_lg').value = out.lg || '';
-            document.getElementById('loginArea').classList.add('d-none');
+            // ✅ Auth done — fill officer/PU data and show incident form
+            officerData = {
+                officer_id: out.officer_id,
+                pu_code:    out.pu_code,
+                ward:       out.ward,
+                ward_code:  out.ward_code,
+                lg:         out.lg,
+                state:      out.state,
+                location:   out.location
+            };
+            document.getElementById('disp_officer').value = out.officer_id;
+            document.getElementById('disp_pu').value      = out.pu_code  || '';
+            document.getElementById('disp_loc').value     = out.location || '';
+            document.getElementById('disp_ward').value    = out.ward     || '';
+            document.getElementById('disp_lg').value      = out.lg       || '';
+            document.getElementById('step2Area').classList.add('d-none');
             document.getElementById('formArea').classList.remove('d-none');
-        } catch (e) {
+            if (_resendTimer) clearInterval(_resendTimer);
+        } catch(e) {
             errEl.innerText = 'Server error. Try again.';
             errEl.classList.remove('d-none');
-            btn.disabled = false; btn.innerText = 'Verify & Continue';
+            btn.disabled = false; btn.innerText = 'Verify OTP & Unlock Form →';
         }
+    }
+
+    // ── Resend OTP ───────────────────────────────────────────────────────────
+    async function resendOTP() {
+        document.getElementById('resendBtn').disabled = true;
+        document.getElementById('otpInput').value = '';
+        document.getElementById('step2Error').classList.add('d-none');
+        document.getElementById('step2Area').classList.add('d-none');
+        document.getElementById('step1Area').classList.remove('d-none');
+        document.getElementById('step1Btn').disabled = false;
+        document.getElementById('step1Btn').innerText = 'Send OTP to My WhatsApp →';
+        await requestOTP();
+    }
+
+    function backToStep1() {
+        if (_resendTimer) clearInterval(_resendTimer);
+        document.getElementById('step2Area').classList.add('d-none');
+        document.getElementById('step1Area').classList.remove('d-none');
+        document.getElementById('step1Btn').disabled = false;
+        document.getElementById('step1Btn').innerText = 'Send OTP to My WhatsApp →';
+        document.getElementById('step1Error').classList.add('d-none');
+        document.getElementById('otpInput').value = '';
+    }
+
+    function startResendCountdown(seconds) {
+        const btn = document.getElementById('resendBtn');
+        const cd  = document.getElementById('resendCountdown');
+        btn.disabled = true;
+        cd.classList.remove('d-none');
+        let remaining = seconds;
+        cd.innerText = `Resend available in ${remaining}s`;
+        _resendTimer = setInterval(() => {
+            remaining--;
+            if (remaining <= 0) {
+                clearInterval(_resendTimer);
+                btn.disabled = false;
+                cd.classList.add('d-none');
+            } else {
+                cd.innerText = `Resend available in ${remaining}s`;
+            }
+        }, 1000);
     }
 
     function setSeverity(level) {
