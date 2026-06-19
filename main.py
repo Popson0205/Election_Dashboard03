@@ -3860,7 +3860,7 @@ async def vote_form():
             </div>
 
             <div class="card p-4">
-                <span class="section-label">2. Official 14-Party Scorecard — 2026 Ọàsun Governorship</span>
+                <span class="section-label">2. Official 14-Party Scorecard — 2026 Osun Governorship</span>
                 <div class="row g-2">{party_cards}</div>
             </div>
 
