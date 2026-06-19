@@ -15,15 +15,7 @@ import cloudinary.uploader
 import hashlib, time, secrets
 from collections import defaultdict
 
-import psycopg2
 
-conn = psycopg2.connect(
-    host="https://fzsqoemnjnkbvkmyhpwr.supabase.co",
-    database="postgres",
-    user="postgres",
-    password="Popson0205@",
-    port=5432
-)
 # --- WHATSAPP ALERT ---
 import threading
 
