@@ -3460,7 +3460,7 @@ HOMEPAGE_HTML = """
 
     <!-- Proceed button -->
     <div style="text-align:center;">
-      <button onclick="document.getElementById('iyamSplash').style.display='none';sessionStorage.setItem('iyam_seen','1')"
+      <button onclick="document.getElementById('iyamSplash').style.display='none'"
               style="background:linear-gradient(135deg,#008751,#00b368);
                      border:none;border-radius:14px;color:#fff;font-family:'Inter',sans-serif;
                      font-size:1rem;font-weight:800;padding:16px 52px;cursor:pointer;
@@ -3481,10 +3481,7 @@ HOMEPAGE_HTML = """
 </div>
 
 <script>
-  // Don't show again in the same browser session
-  if (sessionStorage.getItem('iyam_seen') === '1') {
-    document.getElementById('iyamSplash').style.display = 'none';
-  }
+  // Splash now shows on every page load/refresh (no longer suppressed by sessionStorage)
 </script>
 
 
