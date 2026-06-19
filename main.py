@@ -168,6 +168,18 @@ def _require_dashboard(request: Request):
     if not _is_valid_token(token):
         raise HTTPException(status_code=403, detail="Dashboard access denied")
 
+def _require_admin(request: Request):
+    """Accepts EITHER the admin Bearer key OR a valid ds_session cookie —
+    matches the pattern used by the existing /api/admin/* routes, so the
+    same admin-portal login (Bearer token) works for Supabase-backed routes too."""
+    auth = request.headers.get("Authorization", "")
+    token = request.cookies.get("ds_session")
+    bearer_ok = auth.startswith("Bearer ") and secrets.compare_digest(
+        hashlib.sha256(auth.split(" ", 1)[1].strip().encode()).hexdigest(), _DASHBOARD_KEY_HASH
+    )
+    if not bearer_ok and not _is_valid_token(token):
+        raise HTTPException(status_code=403, detail="Not authorised")
+
 # ── OTP store ────────────────────────────────────────────────────────────────
 # Structure: { officer_id: { otp, expiry, phone_hint, used, attempts, locked_until } }
 _OTP_STORE: dict = {}
@@ -527,7 +539,7 @@ async def upload_officers(request: Request, file: UploadFile = File(...)):
     Required columns: officer_id, lga, ward, polling_unit, phone
     Existing officers are updated (upsert). Safe to re-upload an expanded list.
     """
-    _require_dashboard(request)
+    _require_admin(request)
 
     sb = get_supabase()
     if not sb:
@@ -591,7 +603,7 @@ async def upload_officers(request: Request, file: UploadFile = File(...)):
 @app.get("/api/officers")
 async def list_officers(request: Request, lga: str = "", search: str = "", page: int = 1, filter: str = "all", page_size: int = 50):
     """Admin-only: list officers stored in Supabase, paginated and filterable."""
-    _require_dashboard(request)
+    _require_admin(request)
     sb = get_supabase()
     if not sb:
         raise HTTPException(status_code=503, detail="Supabase not configured.")
@@ -620,7 +632,7 @@ async def list_officers(request: Request, lga: str = "", search: str = "", page:
 @app.get("/api/officers/stats")
 async def officer_stats(request: Request):
     """Admin-only: registration counts for the dashboard stat cards (Supabase-backed)."""
-    _require_dashboard(request)
+    _require_admin(request)
     sb = get_supabase()
     if not sb:
         raise HTTPException(status_code=503, detail="Supabase not configured.")
@@ -637,7 +649,7 @@ async def officer_stats(request: Request):
 @app.post("/api/officers/update")
 async def update_officer(request: Request):
     """Admin-only: update a single officer's phone number in Supabase."""
-    _require_dashboard(request)
+    _require_admin(request)
     sb = get_supabase()
     if not sb:
         raise HTTPException(status_code=503, detail="Supabase not configured.")
@@ -658,7 +670,7 @@ async def update_officer(request: Request):
 @app.post("/api/officers/delete")
 async def delete_officer(request: Request):
     """Admin-only: remove a single officer by officer_id."""
-    _require_dashboard(request)
+    _require_admin(request)
     sb = get_supabase()
     if not sb:
         raise HTTPException(status_code=503, detail="Supabase not configured.")
@@ -2253,7 +2265,7 @@ ADMIN_HTML = """
         document.getElementById('loginBtn').textContent = 'Access Admin Portal →';
     }
 
-    async function loadStats() {
+    async function _loadStatsCore() {
         try {
             const res = await fetch('/api/officers/stats', {
                 headers: { 'Authorization': 'Bearer ' + _adminKey }
@@ -2581,10 +2593,9 @@ ADMIN_HTML = """
         } catch(e) { alert('Server error'); }
     }
 
-    // Override loadStats to also load officer table after login
-    const _origLoadStats = loadStats;
+    // loadStats also refreshes the officer table after login
     async function loadStats() {
-        await _origLoadStats();
+        await _loadStatsCore();
         if (_adminKey) loadOfficerTable(1, 'all', '');
     }
 </script>
