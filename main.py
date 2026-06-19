@@ -589,8 +589,8 @@ async def upload_officers(request: Request, file: UploadFile = File(...)):
 
 
 @app.get("/api/officers")
-async def list_officers(request: Request, lga: str = "", search: str = ""):
-    """Admin-only: list all officers stored in Supabase."""
+async def list_officers(request: Request, lga: str = "", search: str = "", page: int = 1, filter: str = "all", page_size: int = 50):
+    """Admin-only: list officers stored in Supabase, paginated and filterable."""
     _require_dashboard(request)
     sb = get_supabase()
     if not sb:
@@ -602,7 +602,55 @@ async def list_officers(request: Request, lga: str = "", search: str = ""):
         if search:
             q = q.ilike("officer_id", f"%{search}%")
         res = q.execute()
-        return {"status": "success", "count": len(res.data), "officers": res.data}
+        rows = res.data or []
+        if filter == "registered":
+            rows = [r for r in rows if (r.get("phone") or "").strip()]
+        elif filter == "unregistered":
+            rows = [r for r in rows if not (r.get("phone") or "").strip()]
+        total = len(rows)
+        pages = max(1, (total + page_size - 1) // page_size)
+        page = max(1, min(page, pages))
+        start = (page - 1) * page_size
+        page_rows = rows[start:start + page_size]
+        return {"status": "success", "officers": page_rows, "total": total, "page": page, "pages": pages, "count": total}
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.get("/api/officers/stats")
+async def officer_stats(request: Request):
+    """Admin-only: registration counts for the dashboard stat cards (Supabase-backed)."""
+    _require_dashboard(request)
+    sb = get_supabase()
+    if not sb:
+        raise HTTPException(status_code=503, detail="Supabase not configured.")
+    try:
+        res = sb.table("officers").select("phone").execute()
+        rows = res.data or []
+        total = len(rows)
+        with_phone = sum(1 for r in rows if (r.get("phone") or "").strip())
+        return {"total": total, "with_phone": with_phone, "without_phone": total - with_phone}
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.post("/api/officers/update")
+async def update_officer(request: Request):
+    """Admin-only: update a single officer's phone number in Supabase."""
+    _require_dashboard(request)
+    sb = get_supabase()
+    if not sb:
+        raise HTTPException(status_code=503, detail="Supabase not configured.")
+    try:
+        body  = await request.json()
+        oid   = str(body.get("officer_id", "")).strip()
+        if not oid:
+            raise HTTPException(status_code=400, detail="officer_id required.")
+        phone = _clean_phone(str(body.get("phone", "")))
+        sb.table("officers").update({"phone": phone}).eq("officer_id", oid).execute()
+        return {"status": "success", "message": f"Officer {oid} updated."}
+    except HTTPException:
+        raise
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
 
@@ -2207,7 +2255,7 @@ ADMIN_HTML = """
 
     async function loadStats() {
         try {
-            const res = await fetch('/api/admin/officer-stats', {
+            const res = await fetch('/api/officers/stats', {
                 headers: { 'Authorization': 'Bearer ' + _adminKey }
             });
             if (!res.ok) return;
@@ -2339,9 +2387,7 @@ ADMIN_HTML = """
         const res_el = document.getElementById('uploadResult');
         btn.disabled = true; btn.textContent = `Uploading ${valid.length} officers...`;
         res_el.style.display = 'none';
-        // Pass full record including lga so backend can do exact match
-        const officers = valid.map(r => ({ officer_id: r.officer_id, lga: r.lga, phone: r.phone }));
-        await _submitOfficers(officers, res_el);
+        await _submitOfficers(valid, res_el);
         btn.disabled = false; btn.textContent = 'Upload & Register Officers';
         loadStats();
     }
@@ -2356,9 +2402,9 @@ ADMIN_HTML = """
         const officers = lines.map(l => {
             const p = _splitCSVLine(l);
             if (p.length >= 3) {
-                return { officer_id: (p[0]||'').trim(), lga: (p[1]||'').trim(), phone: (p[2]||'').trim() };
+                return { officer_id: (p[0]||'').trim(), lga: (p[1]||'').trim(), ward: '', pu: '', phone: (p[2]||'').trim() };
             } else {
-                return { officer_id: (p[0]||'').trim(), lga: '', phone: (p[1]||'').trim() };
+                return { officer_id: (p[0]||'').trim(), lga: '', ward: '', pu: '', phone: (p[1]||'').trim() };
             }
         }).filter(o => o.officer_id && o.phone);
         if (!officers.length) {
@@ -2372,25 +2418,39 @@ ADMIN_HTML = """
         loadStats();
     }
 
-    // ── Shared submit ────────────────────────────────────────────────────────
+    // ── Shared submit: builds a CSV in memory and posts it to the Supabase-backed
+    //    /api/upload-officers endpoint, which is what actually persists officers.
     async function _submitOfficers(officers, res_el) {
         try {
-            const res = await fetch('/api/admin/set-officer-phone', {
+            const header = 'officer_id,lga,ward,polling_unit,phone';
+            const lines  = officers.map(o =>
+                [o.officer_id, o.lga || '', o.ward || '', o.pu || '', o.phone]
+                    .map(v => `"${String(v).replace(/"/g, '""')}"`).join(',')
+            );
+            const csvText = [header, ...lines].join('\\n');
+            const blob = new Blob([csvText], { type: 'text/csv' });
+
+            const formData = new FormData();
+            formData.append('file', blob, 'officers_upload.csv');
+
+            const res = await fetch('/api/upload-officers', {
                 method: 'POST',
-                headers: { 'Authorization': 'Bearer ' + _adminKey, 'Content-Type': 'application/json' },
-                body: JSON.stringify({ officers })
+                headers: { 'Authorization': 'Bearer ' + _adminKey },
+                body: formData
             });
             const out = await res.json();
             if (!res.ok) {
                 showBanner(res_el, out.detail || 'Upload failed.', 'error');
                 return;
             }
-            let msg = `✅ ${out.updated} officer${out.updated !== 1 ? 's' : ''} registered successfully`;
-            if (out.skipped)    msg += ` · ${out.skipped} skipped (blank phone or invalid format)`;
-            if (out.not_found && out.not_found.length) {
-                msg += `<br><span style="color:#ffc107;font-size:0.78rem;">⚠️ Not found in DB (check LGA spelling): ${out.not_found.slice(0,5).join(', ')}${out.not_found.length > 5 ? ' ...' : ''}</span>`;
+            let msg = `✅ ${out.saved} officer${out.saved !== 1 ? 's' : ''} saved permanently to Supabase`;
+            if (out.skipped) {
+                msg += ` · ${out.skipped} skipped`;
+                if (out.skipped_details && out.skipped_details.length) {
+                    msg += `<br><span style="color:#ffc107;font-size:0.78rem;">⚠️ ${out.skipped_details.slice(0,5).join('; ')}${out.skipped_details.length > 5 ? ' ...' : ''}</span>`;
+                }
             }
-            showBanner(res_el, msg, out.updated > 0 ? 'success' : 'info');
+            showBanner(res_el, msg, out.saved > 0 ? 'success' : 'info');
         } catch(e) {
             showBanner(res_el, 'Server error. Try again.', 'error');
         }
@@ -2440,7 +2500,7 @@ ADMIN_HTML = """
         if (!tbl) return;
         tbl.innerHTML = '<tr><td colspan="6" style="text-align:center;padding:20px;color:rgba(255,255,255,0.3);">Loading...</td></tr>';
         try {
-            const url = `/api/admin/list-officers?page=${_officerPage}&q=${encodeURIComponent(_officerQ)}&filter=${_officerFilter}`;
+            const url = `/api/officers?page=${_officerPage}&search=${encodeURIComponent(_officerQ)}&filter=${_officerFilter}`;
             const res = await fetch(url, { headers: { 'Authorization': 'Bearer ' + _adminKey } });
             const d   = await res.json();
             if (!d.officers || !d.officers.length) {
@@ -2449,19 +2509,21 @@ ADMIN_HTML = """
                 return;
             }
             tbl.innerHTML = d.officers.map(o => {
-                const hasPhone = o.officer_phone && o.officer_phone.trim();
+                const hasPhone = o.phone && o.phone.trim();
                 const phoneDisplay = hasPhone
-                    ? `<span style="color:#00cc66;font-weight:600;">${o.officer_phone}</span>`
+                    ? `<span style="color:#00cc66;font-weight:600;">${o.phone}</span>`
                     : `<span class="phone-missing">— no phone</span>`;
+                const jsId = JSON.stringify(o.officer_id);
+                const jsPhone = JSON.stringify(o.phone || '');
                 const actions = `
-                    <button class="btn-action btn-edit" onclick="editOfficerRow('${o.ward_code}','${o.pu_code}','${o.officer_phone||''}')">✏️ Edit</button>
-                    ${hasPhone ? `<button class="btn-action btn-del" onclick="deleteOfficer('${o.ward_code}','${o.pu_code}')">🗑 Remove</button>` : ''}`;
-                return `<tr id="orow-${o.ward_code}-${o.pu_code}">
-                    <td style="font-weight:700;color:#ffc107;white-space:nowrap;">${o.ward_code}-${o.pu_code}</td>
-                    <td style="font-size:0.74rem;color:rgba(255,255,255,0.6);">${o.lg||'—'}</td>
+                    <button class="btn-action btn-edit" onclick='editOfficerRow(${jsId},${jsPhone})'>✏️ Edit</button>
+                    ${hasPhone ? `<button class="btn-action btn-del" onclick='deleteOfficer(${jsId})'>🗑 Remove</button>` : ''}`;
+                return `<tr id="orow-${o.officer_id}">
+                    <td style="font-weight:700;color:#ffc107;white-space:nowrap;">${o.officer_id}</td>
+                    <td style="font-size:0.74rem;color:rgba(255,255,255,0.6);">${o.lga||'—'}</td>
                     <td style="font-size:0.7rem;color:rgba(255,255,255,0.5);">${o.ward||'—'}</td>
-                    <td style="font-size:0.68rem;color:rgba(255,255,255,0.4);max-width:130px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;" title="${o.location||''}">${o.location||'—'}</td>
-                    <td id="phone-${o.ward_code}-${o.pu_code}">${phoneDisplay}</td>
+                    <td style="font-size:0.68rem;color:rgba(255,255,255,0.4);max-width:130px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;" title="${o.polling_unit||''}">${o.polling_unit||'—'}</td>
+                    <td id="phone-${o.officer_id}">${phoneDisplay}</td>
                     <td style="white-space:nowrap;">${actions}</td>
                 </tr>`;
             }).join('');
@@ -2474,27 +2536,28 @@ ADMIN_HTML = """
         }
     }
 
-    function editOfficerRow(wardCode, puCode, currentPhone) {
-        const phoneCell  = document.getElementById(`phone-${wardCode}-${puCode}`);
-        const row        = document.getElementById(`orow-${wardCode}-${puCode}`);
+    function editOfficerRow(officerId, currentPhone) {
+        const phoneCell  = document.getElementById(`phone-${officerId}`);
+        const row        = document.getElementById(`orow-${officerId}`);
         const actionCell = row.querySelector('td:last-child');
-        phoneCell.innerHTML = `<input type="text" id="ep-${wardCode}-${puCode}" value="${currentPhone}"
+        const jsId = JSON.stringify(officerId);
+        phoneCell.innerHTML = `<input type="text" id="ep-${officerId}" value="${currentPhone.replace(/"/g,'&quot;')}"
             placeholder="+2348012345678"
             style="background:rgba(255,255,255,0.08);border:1px solid rgba(0,135,81,0.5);border-radius:6px;color:#fff;padding:4px 8px;width:155px;font-size:0.78rem;"
-            onkeydown="if(event.key==='Enter')saveOfficerEdit('${wardCode}','${puCode}');if(event.key==='Escape')loadOfficerTable();">`;
+            onkeydown="if(event.key==='Enter')saveOfficerEdit(${jsId});if(event.key==='Escape')loadOfficerTable();">`;
         actionCell.innerHTML = `
-            <button class="btn-action btn-save"   onclick="saveOfficerEdit('${wardCode}','${puCode}')">💾 Save</button>
+            <button class="btn-action btn-save"   onclick='saveOfficerEdit(${jsId})'>💾 Save</button>
             <button class="btn-action btn-cancel" onclick="loadOfficerTable()">✕</button>`;
-        document.getElementById(`ep-${wardCode}-${puCode}`).focus();
+        document.getElementById(`ep-${officerId}`).focus();
     }
 
-    async function saveOfficerEdit(wardCode, puCode) {
-        const phone = document.getElementById(`ep-${wardCode}-${puCode}`).value.trim();
+    async function saveOfficerEdit(officerId) {
+        const phone = document.getElementById(`ep-${officerId}`).value.trim();
         try {
-            const res = await fetch('/api/admin/update-officer', {
-                method: 'PUT',
+            const res = await fetch('/api/officers/update', {
+                method: 'POST',
                 headers: { 'Authorization': 'Bearer ' + _adminKey, 'Content-Type': 'application/json' },
-                body: JSON.stringify({ ward_code: wardCode, pu_code: puCode, phone })
+                body: JSON.stringify({ officer_id: officerId, phone })
             });
             const out = await res.json();
             if (!res.ok) { alert(out.detail || 'Update failed'); return; }
@@ -2503,13 +2566,13 @@ ADMIN_HTML = """
         } catch(e) { alert('Server error'); }
     }
 
-    async function deleteOfficer(wardCode, puCode) {
-        if (!confirm(`Remove phone for ${wardCode}-${puCode}? Officer will not be able to log in via OTP.`)) return;
+    async function deleteOfficer(officerId) {
+        if (!confirm(`Remove officer ${officerId}? They will not be able to log in via OTP.`)) return;
         try {
-            const res = await fetch('/api/admin/delete-officer', {
-                method: 'DELETE',
+            const res = await fetch('/api/officers/delete', {
+                method: 'POST',
                 headers: { 'Authorization': 'Bearer ' + _adminKey, 'Content-Type': 'application/json' },
-                body: JSON.stringify({ ward_code: wardCode, pu_code: puCode })
+                body: JSON.stringify({ officer_id: officerId })
             });
             const out = await res.json();
             if (!res.ok) { alert(out.detail || 'Delete failed'); return; }
