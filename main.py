@@ -23,7 +23,7 @@ def send_whatsapp_alert(payload: dict):
         from twilio.rest import Client
         account_sid = os.environ.get("TWILIO_ACCOUNT_SID", "")
         auth_token  = os.environ.get("TWILIO_AUTH_TOKEN", "")
-        from_number = os.environ.get("TWILIO_WHATSAPP_FROM", "+14155238886")
+        from_number = os.environ.get("TWILIO_WHATSAPP_FROM", "+19014792946")
         recipients_env = os.environ.get("WHATSAPP_RECIPIENTS", "+2349160420100,+2349039587686,+2349072707396")
         to_numbers = [f"whatsapp:{n.strip()}" for n in recipients_env.split(",")]
         if not account_sid or not auth_token:
@@ -69,7 +69,7 @@ def send_incident_alert(payload: dict):
         from twilio.rest import Client
         account_sid = os.environ.get("TWILIO_ACCOUNT_SID", "")
         auth_token  = os.environ.get("TWILIO_AUTH_TOKEN", "")
-        from_number = os.environ.get("TWILIO_WHATSAPP_FROM", "+14155238886")
+        from_number = os.environ.get("TWILIO_WHATSAPP_FROM", "+19014792946")
         recipients_env = os.environ.get("WHATSAPP_RECIPIENTS", "+2349160420100,+2349039587686,+2349072707396")
         to_numbers = [f"whatsapp:{n.strip()}" for n in recipients_env.split(",")]
         if not account_sid or not auth_token:
